@@ -4,6 +4,7 @@
  */
 
 import { prisma } from '../db';
+import { CODE_ENTITY_KEYS, nextEntityCode } from '../code-sequence.service';
 
 // ============================================================================
 // TYPES
@@ -508,23 +509,7 @@ export class JournalEntryService {
    * Generate sequential entry number for tenant
    */
   private async generateEntryNumber(tenantId: string): Promise<string> {
-    const lastEntry = await (prisma as any).journalEntry.findFirst({
-      where: { tenantId },
-      orderBy: {
-        entryNumber: 'desc',
-      },
-      select: {
-        entryNumber: true,
-      },
-    });
-
-    let nextNumber = 1;
-    if (lastEntry) {
-      const lastNum = parseInt(lastEntry.entryNumber.replace(/\D/g, ''), 10);
-      nextNumber = lastNum + 1;
-    }
-
-    return `JE${new Date().getFullYear()}${String(nextNumber).padStart(6, '0')}`;
+    return nextEntityCode(CODE_ENTITY_KEYS.JOURNAL_ENTRY, tenantId);
   }
 
   /**

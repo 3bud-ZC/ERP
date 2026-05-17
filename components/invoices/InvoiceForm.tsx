@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { Toast, useToast } from '@/components/ui/patterns';
 import { InvoiceConfig, fmtMoney } from './InvoiceConfig';
+import { computeInvoiceTotals } from '@/lib/utils/invoice-tax';
 import { InvoiceLayout } from './InvoiceLayout';
 import { QuickAddPartyModal, type CreatedParty } from './QuickAddPartyModal';
 
@@ -20,10 +21,12 @@ interface ProductOption {
 interface UserOption   { id: string; name?: string | null; email: string; }
 
 interface InvoiceLine {
-  productId:    string;
-  description:  string;
-  quantity:     string;
-  price:        string;
+  productId:         string;
+  description:       string;
+  quantity:          string;
+  price:             string;
+  discountPercent:   string;
+  taxRate:           string;
 }
 
 interface ExistingInvoice {
@@ -43,7 +46,10 @@ interface ExistingInvoice {
   template?: string | null;
   /** Header-level discount amount in money. */
   discount?: number;
+  tax?: number;
   total?: number;
+  grandTotal?: number;
+  paidAmount?: number;
   items?: Array<{
     productId: string;
     description?: string | null;
@@ -53,7 +59,7 @@ interface ExistingInvoice {
 }
 
 const emptyLine = (): InvoiceLine => ({
-  productId: '', description: '', quantity: '1', price: '',
+  productId: '', description: '', quantity: '1', price: '', discountPercent: '0', taxRate: '0',
 });
 
 /** Resolves the line total — used in both the form table and the totals
@@ -107,8 +113,10 @@ export function InvoiceForm({
       ? existing.items.map(it => ({
           productId:   it.productId,
           description: it.description ?? '',
-          quantity:    String(it.quantity),
-          price:       String(it.price),
+          quantity:          String(it.quantity),
+          price:             String(it.price),
+          discountPercent:   String((it as { discountPercent?: number }).discountPercent ?? 0),
+          taxRate:           String((it as { taxRate?: number }).taxRate ?? 0),
         }))
       : [emptyLine()],
   );
@@ -122,6 +130,13 @@ export function InvoiceForm({
     return Number.isFinite(pct) ? String(Math.round(pct * 100) / 100) : '0';
   })();
   const [discountPercent, setDiscountPercent] = useState<string>(initialDiscountPercent);
+  const [headerTaxRate, setHeaderTaxRate] = useState(
+    existing?.tax && existing.total
+      ? String(Math.round((existing.tax / Math.max(existing.total, 1)) * 10000) / 100)
+      : '0',
+  );
+  const [extraCharges, setExtraCharges] = useState('0');
+  const [freightAmount, setFreightAmount] = useState('0');
 
   /* ── UI state ── */
   const [saving, setSaving] = useState(false);
@@ -142,14 +157,29 @@ export function InvoiceForm({
     }).finally(() => setDataLoading(false));
   }, [config.partyApi]);
 
-  /* ── Calculations ── */
-  const { subtotal, discountAmount, grandTotal } = useMemo(() => {
-    let gross = 0;
-    for (const l of lines) gross += computeLineNet(l).gross;
-    const pct = Math.max(0, Math.min(100, parseFloat(discountPercent) || 0));
-    const disc = (gross * pct) / 100;
-    return { subtotal: gross, discountAmount: disc, grandTotal: gross - disc };
-  }, [lines, discountPercent]);
+  const totals = useMemo(() => {
+    const validLines = lines.filter(l => l.productId && parseFloat(l.quantity) > 0);
+    return computeInvoiceTotals({
+      lines: validLines.map(l => ({
+        productId: l.productId,
+        quantity: parseFloat(l.quantity) || 0,
+        price: parseFloat(l.price) || 0,
+        discountPercent: parseFloat(l.discountPercent) || 0,
+        taxRate: parseFloat(l.taxRate) || 0,
+        description: l.description,
+      })),
+      headerDiscountPercent: parseFloat(discountPercent) || 0,
+      headerTaxRate: parseFloat(headerTaxRate) || 0,
+      extraCharges: parseFloat(extraCharges) || 0,
+      freightAmount: config.kind === 'purchase' ? parseFloat(freightAmount) || 0 : 0,
+      taxMode: 'exclusive',
+    });
+  }, [lines, discountPercent, headerTaxRate, extraCharges, freightAmount, config.kind]);
+
+  const subtotal = totals.subtotal;
+  const discountAmount = totals.headerDiscount + totals.lineDiscountTotal;
+  const grandTotal = totals.grandTotal;
+  const taxAmount = totals.tax;
 
   /* ── Line helpers ── */
   const setLine = useCallback((i: number, field: keyof InvoiceLine, val: string) => {
@@ -231,15 +261,20 @@ export function InvoiceForm({
       // percentage is round-tripped via `discountPercent`.
       discount:        discountAmount,
       discountPercent: parseFloat(discountPercent) || 0,
-      items: validLines.map(l => {
-        const qty   = parseFloat(l.quantity) || 1;
-        const price = parseFloat(l.price)    || 0;
+      tax:             taxAmount,
+      taxRate:         parseFloat(headerTaxRate) || 0,
+      extraCharges:    parseFloat(extraCharges) || 0,
+      ...(config.kind === 'purchase' && { freightAmount: parseFloat(freightAmount) || 0 }),
+      items: totals.lines.map((computed, idx) => {
+        const l = validLines[idx];
         return {
-          productId:   l.productId,
-          description: (l.description || '').trim() || undefined,
-          quantity:    qty,
-          price:       price,
-          total:       qty * price,
+          productId:       computed.productId,
+          description:     (l?.description || '').trim() || undefined,
+          quantity:        computed.quantity,
+          price:           computed.price,
+          total:           computed.total,
+          discountPercent: computed.discountPercent,
+          taxRate:         computed.taxRate,
         };
       }),
     };
@@ -291,7 +326,8 @@ export function InvoiceForm({
   }, [
     saveMode, partyId, invoiceDate, issueDate, status, paymentStatus, repId,
     paymentTermsDays, currency, template, invoiceNumber, notes, subtotal,
-    grandTotal, discountAmount, discountPercent, lines, config, mode, existing,
+    grandTotal, discountAmount, discountPercent, taxAmount, headerTaxRate, extraCharges,
+    freightAmount, lines, config, mode, existing, totals,
     router, showToast, products,
   ]);
 
@@ -380,10 +416,11 @@ export function InvoiceForm({
             <div>
               <Label>طريقة الدفع</Label>
               <select value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)} className={inputCls}>
-                <option value="cash">نقداً</option>
+                <option value="unpaid">غير مدفوعة</option>
+                <option value="cash">نقداً (مدفوعة كاملاً)</option>
+                <option value="partial">دفع جزئي</option>
+                <option value="paid">مدفوعة</option>
                 <option value="credit">آجل</option>
-                <option value="partial">جزئي</option>
-                <option value="bank_transfer">تحويل بنكي</option>
               </select>
             </div>
             <div>
@@ -440,15 +477,19 @@ export function InvoiceForm({
                   <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[32%]">المنتج</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[22%]">البيان</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[12%]">الكمية</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[14%]">السعر</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[15%]">الإجمالي</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[10%]">السعر</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[8%]">خصم %</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[8%]">ضريبة %</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[12%]">الإجمالي</th>
                   <th className="w-[5%]"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {lines.map((line, i) => {
                   const qty = parseFloat(line.quantity) || 0;
-                  const { net } = computeLineNet(line);
+                  const lineIdx = lines.slice(0, i + 1).filter(l => l.productId && parseFloat(l.quantity) > 0).length - 1;
+                  const computedLine = totals.lines[lineIdx];
+                  const net = computedLine?.total ?? computeLineNet(line).net;
                   const prod = products.find(p => p.id === line.productId);
                   const lowStock = config.kind === 'sales' && prod && prod.stock != null && qty > prod.stock;
                   return (
@@ -477,6 +518,16 @@ export function InvoiceForm({
                         <input type="number" min="0" step="0.01" value={line.price}
                           onChange={e => setLine(i, 'price', e.target.value)}
                           className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input type="number" min="0" max="100" step="0.01" value={line.discountPercent}
+                          onChange={e => setLine(i, 'discountPercent', e.target.value)}
+                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center" />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input type="number" min="0" max="100" step="0.01" value={line.taxRate}
+                          onChange={e => setLine(i, 'taxRate', e.target.value)}
+                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center" />
                       </td>
                       <td className="px-2 py-1.5 text-center font-semibold text-slate-700 tabular-nums">
                         {fmtMoney(net)}
@@ -533,7 +584,34 @@ export function InvoiceForm({
                 </span>
               </div>
 
+              <div className="flex justify-between items-center text-slate-600">
+                <label className="flex items-center gap-2">
+                  <span>ضريبة</span>
+                  <input type="number" min="0" max="100" step="0.01" value={headerTaxRate}
+                    onChange={e => setHeaderTaxRate(e.target.value)}
+                    className="w-20 border border-slate-300 rounded-lg px-2 py-1 text-xs text-center" />
+                  <span className="text-xs text-slate-400">%</span>
+                </label>
+                <span className="tabular-nums">{fmtMoney(taxAmount)}</span>
+              </div>
+              <div className="flex justify-between items-center text-slate-600">
+                <label>رسوم إضافية</label>
+                <input type="number" min="0" step="0.01" value={extraCharges}
+                  onChange={e => setExtraCharges(e.target.value)}
+                  className="w-28 border border-slate-300 rounded-lg px-2 py-1 text-xs" />
+              </div>
+              {config.kind === 'purchase' && (
+                <div className="flex justify-between items-center text-slate-600">
+                  <label>شحن / وصول</label>
+                  <input type="number" min="0" step="0.01" value={freightAmount}
+                    onChange={e => setFreightAmount(e.target.value)}
+                    className="w-28 border border-slate-300 rounded-lg px-2 py-1 text-xs" />
+                </div>
+              )}
               <Row label="الإجمالي" value={fmtMoney(grandTotal)} bold />
+              {mode === 'edit' && existing && (
+                <Row label="المتبقي" value={fmtMoney(Math.max(0, grandTotal - (existing.paidAmount ?? 0)))} />
+              )}
             </div>
           </div>
         </div>

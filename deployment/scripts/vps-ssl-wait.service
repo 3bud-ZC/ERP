@@ -1,0 +1,13 @@
+[Unit]
+Description=ERP SSL auto-activation when DNS for erp-abud.com is ready
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vps-ssl-wait.sh
+Restart=always
+RestartSec=120
+
+[Install]
+WantedBy=multi-user.target

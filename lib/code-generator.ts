@@ -1,89 +1,89 @@
 /**
- * Auto Code Generator Utility
- * Generates unique codes for different entity types
+ * Auto Code Generator Utility (legacy facade → code-sequence.service)
  */
 
-// Counter storage for sequential codes (in production, this should be in database)
-const codeCounters: Record<string, number> = {};
+import {
+  type CodeEntityKey,
+  resolveEntityCode,
+  nextEntityCode,
+  formatEntityCode,
+  CODE_ENTITY_KEYS,
+} from './code-sequence.service';
+
+export { CODE_ENTITY_KEYS, type CodeEntityKey, formatEntityCode };
+
+const LEGACY_ENTITY_MAP: Record<string, CodeEntityKey> = {
+  product: CODE_ENTITY_KEYS.FINISHED_PRODUCT,
+  raw_material: CODE_ENTITY_KEYS.RAW_MATERIAL,
+  warehouse: CODE_ENTITY_KEYS.WAREHOUSE,
+  customer: CODE_ENTITY_KEYS.CUSTOMER,
+  supplier: CODE_ENTITY_KEYS.SUPPLIER,
+  sales_order: CODE_ENTITY_KEYS.SALES_INVOICE,
+  sales_invoice: CODE_ENTITY_KEYS.SALES_INVOICE,
+  purchase_order: CODE_ENTITY_KEYS.PRODUCTION_ORDER,
+  purchase_invoice: CODE_ENTITY_KEYS.PURCHASE_INVOICE,
+};
 
 /**
- * Generate auto code based on entity type and prefix
- * FORMAT: PREFIX-TIMESTAMP-RANDOM (guaranteed unique)
+ * @deprecated Use resolveEntityCode / nextEntityCode from code-sequence.service
  */
-export function generateAutoCode(
+export async function generateAutoCode(
   entityType: string,
-  existingCodes: string[] = []
-): string {
-  const prefixes: Record<string, string> = {
-    'product': 'PROD',
-    'raw_material': 'RAW',
-    'warehouse': 'WH',
-    'customer': 'CUST',
-    'supplier': 'SUP',
-    'sales_order': 'SO',
-    'sales_invoice': 'SI',
-    'purchase_order': 'PO',
-    'purchase_invoice': 'PI',
-  };
-
-  const prefix = prefixes[entityType] || 'CODE';
-  
-  // Generate unique code: PREFIX-TIMESTAMP-RANDOM
-  const timestamp = Date.now().toString().slice(-6); // Last 6 digits of timestamp
-  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-  const code = `${prefix}-${timestamp}-${random}`;
-  
-  // Ensure uniqueness (very unlikely to collide, but check anyway)
-  if (existingCodes.includes(code)) {
-    // Recursively generate new code if collision (extremely rare)
-    return generateAutoCode(entityType, existingCodes);
+  _existingCodes: string[] = [],
+  tenantId?: string,
+): Promise<string> {
+  const key = LEGACY_ENTITY_MAP[entityType];
+  if (!key || !tenantId) {
+    const prefixes: Record<string, string> = {
+      product: 'FG',
+      raw_material: 'RM',
+      warehouse: 'WH',
+      customer: 'CUS',
+      supplier: 'SUP',
+    };
+    const prefix = prefixes[entityType] || 'CODE';
+    const year = new Date().getFullYear();
+    return formatEntityCode(prefix, year, Date.now() % 1000000);
   }
-  
-  return code;
+  return nextEntityCode(key, tenantId);
 }
 
 /**
- * Generate random code (fallback method)
+ * @deprecated Use resolveEntityCode when user may provide a code
  */
+export async function generateAutoCodeForTenant(
+  entityType: string,
+  tenantId: string,
+  provided?: string | null,
+): Promise<string> {
+  const key = LEGACY_ENTITY_MAP[entityType];
+  if (!key) {
+    return generateAutoCode(entityType, [], tenantId);
+  }
+  return resolveEntityCode(provided, key, tenantId);
+}
+
 export function generateRandomCode(prefix: string): string {
-  const timestamp = Date.now().toString(36).slice(-4).toUpperCase();
-  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-  return `${prefix}-${timestamp}${random}`;
+  const year = new Date().getFullYear();
+  const random = Math.floor(Math.random() * 999999) + 1;
+  return formatEntityCode(prefix, year, random);
 }
 
-/**
- * Check if code exists in list
- */
 export function isCodeExists(code: string, existingCodes: string[]): boolean {
   return existingCodes.includes(code);
 }
 
 /**
- * Get next sequential code
+ * @deprecated Use nextEntityCode from code-sequence.service
  */
 export function getNextSequentialCode(
   prefix: string,
-  existingCodes: string[]
+  existingCodes: string[],
 ): string {
-  const year = new Date().getFullYear().toString().slice(-2);
-  
-  // Extract numbers from existing codes with same prefix and year
-  const samePrefixCodes = existingCodes.filter(c => 
-    c.startsWith(`${prefix}-${year}`)
-  );
-  
-  if (samePrefixCodes.length === 0) {
-    return `${prefix}-${year}-0001`;
-  }
-  
-  // Find max number
-  const numbers = samePrefixCodes.map(code => {
-    const match = code.match(/-(\d{4})$/);
-    return match ? parseInt(match[1], 10) : 0;
-  });
-  
-  const maxNumber = Math.max(...numbers);
-  const nextNumber = (maxNumber + 1).toString().padStart(4, '0');
-  
-  return `${prefix}-${year}-${nextNumber}`;
+  const year = new Date().getFullYear();
+  const max = existingCodes.reduce((m, code) => {
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\\d+)$`, 'i'));
+    return match ? Math.max(m, parseInt(match[1], 10)) : m;
+  }, 0);
+  return formatEntityCode(prefix, year, max + 1);
 }

@@ -1,13 +1,12 @@
-import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
+import { createInventoryCostingEngine } from '@/lib/inventory-costing';
 
-// Disable caching for real-time data
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// GET - Get inventory valuation
+// GET - Inventory valuation from costing layers (InventoryValuation table)
 export async function GET(request: Request) {
   try {
     const user = await getAuthenticatedUser(request);
@@ -16,59 +15,89 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const productId = searchParams.get('productId');
-    const autoRecalculate = searchParams.get('autoRecalculate') === 'true';
+    const type = searchParams.get('type');
 
-    let products = productId 
-      ? await (prisma as any).product.findMany({ where: { id: productId } })
-      : await (prisma as any).product.findMany({ where: { stock: { gt: 0 } } });
+    const productWhere: Record<string, unknown> = { tenantId: user.tenantId };
+    if (productId) productWhere.id = productId;
+    if (type === 'raw_material' || type === 'finished_product') productWhere.type = type;
 
-    const valuations: any[] = [];
+    const products = await prisma.product.findMany({
+      where: productWhere,
+      select: {
+        id: true,
+        code: true,
+        nameAr: true,
+        nameEn: true,
+        stock: true,
+        type: true,
+        cost: true,
+      },
+    });
+
+    const valuations: Array<{
+      productId: string;
+      productCode: string;
+      productName: string | null;
+      productType: string | null;
+      quantity: number;
+      stockQuantity: number;
+      averageCost: number;
+      totalValue: number;
+      lastUpdated: Date | null;
+      isStale: boolean;
+    }> = [];
 
     for (const product of products) {
-      // Get current valuation from InventoryValuation model
-      let valuation = await (prisma as any).inventoryValuation.findUnique({
+      let valuation = await prisma.inventoryValuation.findUnique({
         where: { productId: product.id },
       });
 
-      // Calculate real-time valuation
-      const currentQuantity = product.stock;
-      const currentCost = product.cost;
-      const currentValue = currentQuantity * currentCost;
+      const stockQty = product.stock ?? 0;
+      const fallbackValue = stockQty * (product.cost ?? 0);
 
-      if (autoRecalculate || !valuation) {
-        // Update or create valuation
-        if (valuation) {
-          valuation = await (prisma as any).inventoryValuation.update({
-            where: { productId: product.id },
-            data: {
-              totalQuantity: currentQuantity,
-              totalValue: currentValue,
-              averageCost: currentCost,
-              lastUpdated: new Date(),
-            },
-          });
-        } else {
-          valuation = await (prisma as any).inventoryValuation.create({
-            data: {
-              productId: product.id,
-              totalQuantity: currentQuantity,
-              totalValue: currentValue,
-              averageCost: currentCost,
-              lastUpdated: new Date(),
-            },
-          });
-        }
+      if (!valuation && stockQty > 0 && (product.cost ?? 0) > 0) {
+        valuations.push({
+          productId: product.id,
+          productCode: product.code,
+          productName: product.nameAr || product.nameEn,
+          productType: product.type,
+          quantity: stockQty,
+          stockQuantity: stockQty,
+          averageCost: product.cost ?? 0,
+          totalValue: fallbackValue,
+          lastUpdated: null,
+          isStale: true,
+        });
+        continue;
+      }
+
+      if (!valuation) {
+        valuations.push({
+          productId: product.id,
+          productCode: product.code,
+          productName: product.nameAr || product.nameEn,
+          productType: product.type,
+          quantity: 0,
+          stockQuantity: stockQty,
+          averageCost: product.cost ?? 0,
+          totalValue: 0,
+          lastUpdated: null,
+          isStale: stockQty > 0,
+        });
+        continue;
       }
 
       valuations.push({
         productId: product.id,
         productCode: product.code,
         productName: product.nameAr || product.nameEn,
+        productType: product.type,
         quantity: valuation.totalQuantity,
+        stockQuantity: stockQty,
         averageCost: valuation.averageCost,
         totalValue: valuation.totalValue,
         lastUpdated: valuation.lastUpdated,
-        isStale: Math.abs(valuation.totalValue - currentValue) > 0.01,
+        isStale: Math.abs(valuation.totalQuantity - stockQty) > 0.001,
       });
     }
 
@@ -76,69 +105,45 @@ export async function GET(request: Request) {
     const totalQuantity = valuations.reduce((sum, v) => sum + v.quantity, 0);
 
     return apiSuccess(
-      { valuations, summary: { totalInventoryValue, totalQuantity, productCount: valuations.length } },
-      'Inventory valuation fetched successfully'
+      {
+        valuations,
+        summary: {
+          totalInventoryValue,
+          totalQuantity,
+          productCount: valuations.length,
+        },
+      },
+      'Inventory valuation fetched successfully',
     );
   } catch (error) {
     return handleApiError(error, 'Fetch inventory valuation');
   }
 }
 
-// POST - Force recalculation of inventory valuation
+// POST - Rebuild FIFO valuation snapshots from layers (does not overwrite layers)
 export async function POST(request: Request) {
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!checkPermission(user, 'manage_inventory')) return apiError('ليس لديك صلاحية', 403);
 
-    const body = await request.json();
-    const { productId } = body;
+    const body = await request.json().catch(() => ({}));
+    const productId = body?.productId as string | undefined;
 
-    let products = productId 
-      ? await (prisma as any).product.findMany({ where: { id: productId } })
-      : await (prisma as any).product.findMany();
+    const products = await prisma.product.findMany({
+      where: {
+        tenantId: user.tenantId!,
+        ...(productId ? { id: productId } : {}),
+      },
+      select: { id: true, code: true },
+    });
 
-    const updatedValuations: any[] = [];
-
-    for (const product of products) {
-      const currentQuantity = product.stock;
-      const currentCost = product.cost;
-      const currentValue = currentQuantity * currentCost;
-
-      // Update or create valuation
-      const valuation = await (prisma as any).inventoryValuation.upsert({
-        where: { productId: product.id },
-        create: {
-          productId: product.id,
-          totalQuantity: currentQuantity,
-          totalValue: currentValue,
-          averageCost: currentCost,
-          lastUpdated: new Date(),
-        },
-        update: {
-          totalQuantity: currentQuantity,
-          totalValue: currentValue,
-          averageCost: currentCost,
-          lastUpdated: new Date(),
-        },
-      });
-
-      updatedValuations.push({
-        productId: product.id,
-        productCode: product.code,
-        oldQuantity: valuation.totalQuantity,
-        newQuantity: currentQuantity,
-        oldValue: valuation.totalValue,
-        newValue: currentValue,
-      });
+    const engine = createInventoryCostingEngine(user.tenantId!);
+    for (const p of products) {
+      await engine.refreshValuation(p.id);
     }
 
-    const totalValue = updatedValuations.reduce((sum, v) => sum + v.newValue, 0);
-
-    return apiSuccess(
-      { updatedValuations, summary: { totalValue, count: updatedValuations.length } },
-      'Inventory valuation recalculated successfully'
-    );
+    return apiSuccess({ count: products.length }, 'Valuation refreshed from cost layers');
   } catch (error) {
     return handleApiError(error, 'Recalculate inventory valuation');
   }

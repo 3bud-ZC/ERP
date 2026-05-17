@@ -1,5 +1,11 @@
 import { prisma } from './db';
 import { Prisma } from '@prisma/client';
+import {
+  recordStockInflowWithTx,
+  recordStockOutflowWithTx,
+  inventoryRefType,
+  getUnitCostInTx,
+} from './inventory-costing-bridge';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -24,6 +30,11 @@ export type InventoryTransactionType =
 export interface InventoryTransactionItem {
   productId: string;
   quantity: number;
+}
+
+/** Stock movement with optional unit cost for purchase / production inflows. */
+export interface StockMovementItem extends InventoryTransactionItem {
+  unitCost?: number;
 }
 
 /**
@@ -146,7 +157,7 @@ export async function createInventoryTransaction(
  */
 export async function incrementStockWithTransaction(
   tx: TransactionClient,
-  items: InventoryTransactionItem[],
+  items: StockMovementItem[],
   referenceId: string,
   transactionType: 'purchase' | 'production_in',
   tenantId: string
@@ -194,7 +205,6 @@ export async function incrementStockWithTransaction(
       },
     });
 
-    // Create inventory transaction record
     await createInventoryTransaction(
       tx,
       item.productId,
@@ -203,6 +213,23 @@ export async function incrementStockWithTransaction(
       tenantId,
       referenceId
     );
+
+    const unitCost =
+      item.unitCost != null && item.unitCost >= 0
+        ? item.unitCost
+        : await getUnitCostInTx(tx, item.productId);
+
+    if (unitCost > 0) {
+      await recordStockInflowWithTx(
+        tx,
+        tenantId,
+        item.productId,
+        item.quantity,
+        unitCost,
+        inventoryRefType(transactionType),
+        referenceId,
+      );
+    }
   }
 }
 
@@ -223,7 +250,7 @@ export async function decrementStockWithTransaction(
   referenceId: string,
   transactionType: 'sale' | 'production_out',
   tenantId: string
-): Promise<void> {
+): Promise<number> {
   // Validate inputs
   validateTenantId(tenantId);
 
@@ -235,13 +262,14 @@ export async function decrementStockWithTransaction(
     throw new Error('referenceId is required and must be a non-empty string');
   }
 
-  // Validate transaction type
   validateTransactionType(transactionType);
+
+  let totalCogs = 0;
+  const refType = inventoryRefType(transactionType);
 
   for (const item of items) {
     validateInventoryItem(item);
 
-    // Get current product version for optimistic locking
     const product = await tx.product.findUnique({
       where: { id: item.productId },
       select: { version: true, tenantId: true, stock: true },
@@ -255,24 +283,15 @@ export async function decrementStockWithTransaction(
       throw new Error(`Product belongs to different tenant`);
     }
 
-    // Check stock availability
     if (product.stock < item.quantity) {
       throw new Error(`Insufficient stock for product ${item.productId}. Available: ${product.stock}, Required: ${item.quantity}`);
     }
 
-    // Update product stock with version check (optimistic locking)
     await tx.product.update({
-      where: { 
-        id: item.productId,
-        version: product.version,
-      },
-      data: { 
-        stock: { decrement: item.quantity },
-        version: { increment: 1 },
-      },
+      where: { id: item.productId, version: product.version },
+      data: { stock: { decrement: item.quantity }, version: { increment: 1 } },
     });
 
-    // Create inventory transaction record (negative quantity for out)
     await createInventoryTransaction(
       tx,
       item.productId,
@@ -281,7 +300,18 @@ export async function decrementStockWithTransaction(
       tenantId,
       referenceId
     );
+
+    totalCogs += await recordStockOutflowWithTx(
+      tx,
+      tenantId,
+      item.productId,
+      item.quantity,
+      refType,
+      referenceId,
+    );
   }
+
+  return totalCogs;
 }
 
 /**
@@ -303,7 +333,7 @@ export async function atomicDecrementStock(
   referenceId: string,
   transactionType: 'sale' | 'production_out',
   tenantId: string
-): Promise<void> {
+): Promise<number> {
   // Validate inputs
   validateTenantId(tenantId);
 
@@ -315,13 +345,14 @@ export async function atomicDecrementStock(
     throw new Error('referenceId is required and must be a non-empty string');
   }
 
-  // Validate transaction type
   validateTransactionType(transactionType);
+
+  let totalCogs = 0;
+  const refType = inventoryRefType(transactionType);
 
   for (const item of items) {
     validateInventoryItem(item);
 
-    // Get current product version for optimistic locking
     const product = await tx.product.findUnique({
       where: { id: item.productId },
       select: { version: true, tenantId: true, nameAr: true, stock: true },
@@ -335,14 +366,13 @@ export async function atomicDecrementStock(
       throw new Error(`Product belongs to different tenant`);
     }
 
-    // Single atomic SQL: UPDATE product SET stock = stock - qty, version = version + 1 WHERE id = ? AND stock >= qty AND version = ?
     const result = await tx.product.updateMany({
       where: {
         id: item.productId,
         stock: { gte: item.quantity },
         version: product.version,
       },
-      data: { 
+      data: {
         stock: { decrement: item.quantity },
         version: { increment: 1 },
       },
@@ -354,7 +384,6 @@ export async function atomicDecrementStock(
       );
     }
 
-    // Record the inventory transaction
     await createInventoryTransaction(
       tx,
       item.productId,
@@ -363,7 +392,18 @@ export async function atomicDecrementStock(
       tenantId,
       referenceId
     );
+
+    totalCogs += await recordStockOutflowWithTx(
+      tx,
+      tenantId,
+      item.productId,
+      item.quantity,
+      refType,
+      referenceId,
+    );
   }
+
+  return totalCogs;
 }
 
 // ============================================================================

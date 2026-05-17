@@ -6,10 +6,19 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://postgres:password@db:5432/erp_system
+      - PORT=3000
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXT_TELEMETRY_DISABLED=1
+      - ALLOW_SEED=false
+      - E2E_BYPASS_RATE_LIMIT=0
+      - E2E_ALLOW_AUTH_RESET=0
+      - E2E_ALLOW_PRODUCTION_DB=0
     depends_on:
       - db
     restart: unless-stopped
@@ -19,13 +28,11 @@ services:
   db:
     image: postgres:15-alpine
     environment:
-      - POSTGRES_DB=erp_system
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=${POSTGRES_DB:-erp_system}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     restart: unless-stopped
     networks:
       - erp-network
@@ -36,8 +43,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./ssl:/etc/nginx/ssl
+      - ./deployment/nginx.docker.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/letsencrypt/live:ro
     depends_on:
       - app
     restart: unless-stopped

@@ -115,6 +115,17 @@ export default function ProductsPage() {
     >
       <Toast toast={toast} />
 
+      <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50/80 px-4 py-3 text-sm text-blue-900 flex flex-wrap items-center gap-3">
+        <span>تم فصل المخزون إلى صفحتين متخصصتين:</span>
+        <Link href="/inventory/raw-materials" className="font-semibold underline hover:text-blue-700">
+          المواد الخام
+        </Link>
+        <span>·</span>
+        <Link href="/inventory/finished-products" className="font-semibold underline hover:text-blue-700">
+          المنتجات النهائية
+        </Link>
+      </div>
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 mb-5">
         <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">

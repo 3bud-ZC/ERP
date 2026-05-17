@@ -4,9 +4,23 @@ import { purchaseInvoiceRepo } from '@/lib/repositories/purchase-invoice.repo';
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-import { incrementStockWithTransaction, createInventoryTransaction } from '@/lib/inventory-transactions';
-import { createPurchaseInvoiceEntry, postJournalEntry, reverseJournalEntry } from '@/lib/accounting';
-import { dualRunCompare } from '@/lib/domain/accounting/dual-run';
+import {
+  reverseJournalEntry,
+  createPurchaseInvoiceEntry,
+  postJournalEntry,
+} from '@/lib/accounting';
+import { dualRunCompare, dualRunCompareById } from '@/lib/domain/accounting/dual-run';
+import { createInventoryTransaction } from '@/lib/inventory-transactions';
+import {
+  executeCreatePurchaseInvoice,
+  executeUpdatePurchaseInvoice,
+  executeCancelPurchaseInvoice,
+  executeDeletePurchaseInvoice,
+  InvoiceExecutionError,
+  mapExecutionError,
+} from '@/lib/services/invoice-execution.service';
+import { mapExecutionItems } from '@/lib/utils/map-execution-items';
+import { recordAuditTrail } from '@/lib/services/audit-trail.service';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { logActivity } from '@/lib/activity-log';
@@ -106,70 +120,61 @@ export async function POST(request: Request) {
         if (Number(item.price) < 0) return apiError('السعر يجب أن يكون صحيحاً', 400);
       }
 
-      // Calculate totals server-side (ignore client-sent values).
-      // Header-level discount: client sends either `discount` (money amount)
-      // or `discountPercent` (% of subtotal). The first wins if both arrive.
-      const subtotal       = items.reduce(
-        (s: number, it: any) => s + Number(it.quantity) * Number(it.price), 0,
-      );
-      const explicitDisc   = Number(invoiceData.discount ?? 0);
-      const discPct        = Number(invoiceData.discountPercent ?? 0);
-      const discountAmount = explicitDisc > 0
-        ? explicitDisc
-        : (subtotal * Math.max(0, Math.min(100, discPct))) / 100;
-      const total          = Math.max(0, subtotal - discountAmount);
-      // Strip the percentage so it doesn't end up in `data: { ...invoiceData }`
-      // (the schema doesn't have a `discountPercent` column on the header).
       delete invoiceData.discountPercent;
 
-      // Auto-generate invoiceNumber if missing/empty so the form's "(اختياري)"
-      // hint matches reality. If the user typed one, we use it as-is.
       const invoiceNumber = await resolveInvoiceNumber(
         invoiceData.invoiceNumber,
         'PI',
         user.tenantId!,
       );
 
-      const invoice = await prisma.$transaction(async (tx) => {
-        const newInvoice = await (tx as any).purchaseInvoice.create({
-          data: {
-            ...invoiceData,
-            invoiceNumber,
-            tenantId: user.tenantId,   // always from server — never trust client
-            total,
-            discount: discountAmount,
-            items: {
-              create: items.map((item: any) => {
-                const qty   = Number(item.quantity) || 0;
-                const price = Number(item.price)    || 0;
-                return {
-                  productId:   item.productId,
-                  description: item.description ?? null,
-                  quantity:    qty,
-                  price:       price,
-                  total:       qty * price,
-                };
-              }),
-            },
-          },
-          include: {
-            items: true,
-          },
-        });
-
-        // Increment stock for all purchased items
-        await incrementStockWithTransaction(tx, items, newInvoice.id, 'purchase', user.tenantId || invoiceData.tenantId);
-
-        // Create and post accounting journal entry inside transaction for atomicity
-        const journalEntry = await createPurchaseInvoiceEntry(newInvoice.id, total, user.tenantId);
-        if (journalEntry) {
-          await postJournalEntry(journalEntry.id);
-          // Phase 1 dual-run: validate against new domain engine (no behavior change)
-          await dualRunCompare('PurchaseInvoice:POST', journalEntry);
-        }
-
-        return newInvoice;
+      const result = await executeCreatePurchaseInvoice({
+        invoiceData: {
+          invoiceNumber,
+          date: invoiceData.date ? new Date(invoiceData.date) : new Date(),
+          supplierId: invoiceData.supplierId,
+          notes: invoiceData.notes,
+          status: invoiceData.status,
+          paymentStatus: invoiceData.paymentStatus,
+          paidAmount: invoiceData.paidAmount,
+          paymentTermsDays: invoiceData.paymentTermsDays,
+          issueDate: invoiceData.issueDate ? new Date(invoiceData.issueDate) : undefined,
+          purchaseRepId: invoiceData.purchaseRepId,
+          currency: invoiceData.currency,
+          template: invoiceData.template,
+          discount: invoiceData.discount,
+          discountPercent: body.discountPercent,
+          taxRate: invoiceData.taxRate ?? body.taxRate,
+          tax: invoiceData.tax,
+          extraCharges: body.extraCharges,
+          freightAmount: body.freightAmount,
+          taxMode: body.taxMode,
+        },
+        items: items.map((item: {
+          productId: string;
+          quantity: number;
+          price: number;
+          unitCost?: number;
+          discountPercent?: number;
+          taxRate?: number;
+          description?: string;
+        }) => ({
+          productId: item.productId,
+          quantity: Number(item.quantity),
+          price: Number(item.price),
+          unitCost: item.unitCost ?? Number(item.price),
+          discountPercent: item.discountPercent,
+          taxRate: item.taxRate,
+          description: item.description,
+        })),
+        tenantId: user.tenantId!,
+        userId: user.id,
       });
+
+      const invoice = result.invoice;
+      if (result.journalEntry?.id) {
+        await dualRunCompareById('PurchaseInvoice:POST', result.journalEntry.id);
+      }
 
       // Log audit action
       await logAuditAction(
@@ -194,18 +199,17 @@ export async function POST(request: Request) {
 
       return apiSuccess(invoice, 'Purchase invoice created successfully');
     } catch (error: any) {
-      // Server-side: full error logged via handleApiError; client gets translated message
       console.error('[purchase-invoices:POST] failed', error);
+      if (error instanceof InvoiceExecutionError) {
+        const status = error.code === 'INVENTORY_FAILED' ? 409 : error.code === 'VALIDATION_FAILED' ? 400 : 500;
+        return apiError(error.message, status);
+      }
       const msg = translatePurchaseError(error);
       return apiError(msg, 500);
     }
   }
 
-// PUT - Update purchase invoice (requires update_purchase_invoice permission).
-//
-// FORCE-SAVE policy: mirrors the sales-invoice PUT — sanitize bad rows,
-// wrap journal-entry/audit side-effects in try/catch, surface warnings
-// instead of failing.  See the long comment on sales-invoice PUT.
+// PUT — canonical update with reverse + republish (Phase 5B).
 export async function PUT(request: Request) {
   try {
     const user = await getAuthenticatedUser(request);
@@ -214,166 +218,104 @@ export async function PUT(request: Request) {
       return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
     }
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
-    const tenantId = user.tenantId; // narrow
 
     const body = await request.json();
-    const { id: bodyId, items: rawItems, ...invoiceData } = body;
+    const { id: bodyId, items: rawItems, discountPercent, taxRate, taxMode, extraCharges, freightAmount, ...invoiceData } = body;
     const queryId = new URL(request.url).searchParams.get('id');
     const id = bodyId || queryId;
     if (!id) return apiError('Invoice ID missing', 400);
 
-    // Normalize date fields (form sends "YYYY-MM-DD"; Prisma needs ISO-8601).
     normalizeInvoiceDates(invoiceData);
 
-    /* ── Sanitize items ── */
-    const items: any[] = Array.isArray(rawItems)
-      ? rawItems
-          .filter((it: any) =>
-            it && it.productId && Number(it.quantity) > 0 && Number(it.price) >= 0,
-          )
-          .map((it: any) => {
-            const qty   = Number(it.quantity) || 0;
-            const price = Number(it.price)    || 0;
-            return {
-              productId:   it.productId,
-              description: it.description ?? null,
-              quantity:    qty,
-              price:       price,
-              total:       qty * price,
-            };
-          })
-      : [];
-    if (items.length === 0) {
-      return apiError('يجب أن تحتوي الفاتورة على صنف واحد على الأقل بكمية وسعر صالحين', 400);
-    }
-
-    /* ── Header-level discount: prefer `discount` (money) over % ── */
-    const subtotal = items.reduce(
-      (s: number, it: any) => s + Number(it.quantity) * Number(it.price), 0,
-    );
-    const explicitDisc = Number(invoiceData.discount ?? 0);
-    const discPct      = Number(invoiceData.discountPercent ?? 0);
-    const headerDisc   = explicitDisc > 0
-      ? explicitDisc
-      : (subtotal * Math.max(0, Math.min(100, discPct))) / 100;
-    invoiceData.discount   = headerDisc;
-    invoiceData.total      = subtotal;
-    invoiceData.grandTotal = Math.max(0, subtotal - headerDisc);
-    delete invoiceData.discountPercent;
-
-    const warnings: string[] = [];
-
-    /* ── 1. Fetch existing invoice (tenant-scoped) ── */
-    const existingInvoice = await (prisma as any).purchaseInvoice.findFirst({
+    const existingInvoice = await prisma.purchaseInvoice.findFirst({
       where: { id, tenantId: user.tenantId },
       include: { items: true },
     });
     if (!existingInvoice) return apiError('الفاتورة غير موجودة', 404);
 
-    /* ── 2. Compute per-product stock deltas ── */
-    const oldItemMap = new Map(existingInvoice.items.map((i: any) => [i.productId, i.quantity]));
-    const newItemMap = new Map(items.map((i: any) => [i.productId, i.quantity]));
-    const stockDeltas: { productId: string; delta: number }[] = [];
-    const allProductIds = new Set([
-      ...Array.from(oldItemMap.keys()),
-      ...Array.from(newItemMap.keys()),
-    ]);
-    for (const productId of Array.from(allProductIds)) {
-      const oldQty = Number(oldItemMap.get(productId) || 0);
-      const newQty = Number(newItemMap.get(productId) || 0);
-      const delta = newQty - oldQty;
-      if (delta !== 0) stockDeltas.push({ productId: productId as string, delta });
-    }
-
-    /* ── 3. Reverse existing journal entry (best-effort) ── */
-    try {
-      const existingJE = await (prisma as any).journalEntry.findFirst({
-        where: { referenceType: 'PurchaseInvoice', referenceId: id },
+    if (invoiceData.status === 'cancelled') {
+      const cancelResult = await executeCancelPurchaseInvoice({
+        invoiceId: id,
+        tenantId: user.tenantId,
+        userId: user.id,
       });
-      if (existingJE) await reverseJournalEntry(existingJE.id);
-    } catch (e) {
-      warnings.push('تعذّر عكس القيد المحاسبي القديم — تم حفظ الفاتورة على أي حال');
-      console.warn('PURCHASE PUT WARN (JE reverse):', (e as Error).message);
+      await recordAuditTrail({
+        userId: user.id,
+        tenantId: user.tenantId,
+        module: 'purchases',
+        entity: 'PurchaseInvoice',
+        entityId: id,
+        action: 'CANCEL',
+        before: existingInvoice,
+        after: cancelResult.invoice,
+        ip: request.headers.get('x-forwarded-for') || undefined,
+        userAgent: request.headers.get('user-agent') || undefined,
+      });
+      return apiSuccess(cancelResult.invoice, 'تم إلغاء الفاتورة');
     }
 
-    /* ── 4. Update invoice + apply stock deltas atomically ── */
-    const invoice = await prisma.$transaction(async tx => {
-      await (tx as any).purchaseInvoiceItem.deleteMany({ where: { purchaseInvoiceId: id } });
+    const items = mapExecutionItems(rawItems ?? []).map(it => ({
+      ...it,
+      unitCost: it.unitCost ?? it.price,
+    }));
+    if (items.length === 0) {
+      return apiError('يجب أن تحتوي الفاتورة على صنف واحد على الأقل', 400);
+    }
 
-      const updatedInvoice = await (tx as any).purchaseInvoice.update({
-        where: { id },
-        data: { ...invoiceData, items: { create: items } },
-        include: { items: true },
+    try {
+      const result = await executeUpdatePurchaseInvoice({
+        invoiceId: id,
+        tenantId: user.tenantId,
+        userId: user.id,
+        invoiceData: {
+          supplierId: invoiceData.supplierId,
+          date: invoiceData.date ? new Date(invoiceData.date) : undefined,
+          notes: invoiceData.notes,
+          status: invoiceData.status,
+          paymentStatus: invoiceData.paymentStatus,
+          paidAmount: invoiceData.paidAmount,
+          discount: invoiceData.discount,
+          discountPercent,
+          taxRate: invoiceData.taxRate ?? taxRate,
+          tax: invoiceData.tax,
+          extraCharges,
+          freightAmount,
+          taxMode,
+        },
+        items,
+        republish: true,
       });
 
-      for (const d of stockDeltas) {
-        try {
-          await (tx as any).product.update({
-            where: { id: d.productId },
-            data: { stock: { increment: d.delta } },
-          });
-          await createInventoryTransaction(
-            tx, d.productId, 'adjustment', d.delta,
-            tenantId, id,
-            'Purchase invoice updated — stock quantity adjusted',
-          );
-        } catch (e) {
-          console.warn(`PURCHASE PUT WARN (stock ${d.productId}):`, (e as Error).message);
-        }
-      }
-      return updatedInvoice;
-    });
+      await recordAuditTrail({
+        userId: user.id,
+        tenantId: user.tenantId,
+        module: 'purchases',
+        entity: 'PurchaseInvoice',
+        entityId: id,
+        action: result.republished ? 'POST' : 'UPDATE',
+        before: existingInvoice,
+        after: result.invoice,
+        ip: request.headers.get('x-forwarded-for') || undefined,
+        userAgent: request.headers.get('user-agent') || undefined,
+        metadata: { republished: result.republished },
+      });
 
-    /* ── 5. Recreate journal entry (best-effort) ── */
-    try {
-      const newTotal = items.reduce((s: number, it: any) => s + Number(it.quantity) * Number(it.price), 0);
-      const newJE = await createPurchaseInvoiceEntry(invoice.id, newTotal, user.tenantId);
-      if (newJE) {
-        await postJournalEntry(newJE.id);
-        await dualRunCompare('PurchaseInvoice:PUT', newJE);
-      }
-    } catch (e) {
-      warnings.push('تعذّر إنشاء القيد المحاسبي الجديد — تم حفظ الفاتورة على أي حال');
-      console.warn('PURCHASE PUT WARN (JE create):', (e as Error).message);
-    }
-
-    /* ── 6. Audit + activity log (best-effort) ── */
-    try {
-      await logAuditAction(
-        user.id, 'UPDATE', 'purchases', 'PurchaseInvoice', invoice.id, { invoice },
-        request.headers.get('x-forwarded-for') || undefined,
-        request.headers.get('user-agent') || undefined,
+      return apiSuccess(
+        { ...result.invoice, republished: result.republished },
+        result.republished ? 'تم تحديث الفاتورة وإعادة ترحيلها' : 'تم تحديث الفاتورة',
       );
-      await logActivity({
-        entity: 'PurchaseInvoice', entityId: invoice.id, action: 'UPDATE',
-        userId: user.id, before: existingInvoice, after: invoice,
-      });
-    } catch (e) {
-      console.warn('PURCHASE PUT AUDIT WARN:', (e as Error).message);
+    } catch (error) {
+      if (error instanceof InvoiceExecutionError) {
+        const mapped = mapExecutionError(error);
+        return apiError(mapped.body.error, mapped.status, mapped.body);
+      }
+      throw error;
     }
-
-    return apiSuccess(
-      { ...invoice, warnings: warnings.length ? warnings : undefined },
-      warnings.length ? 'تم حفظ الفاتورة مع تحذيرات' : 'Purchase invoice updated successfully',
-    );
   } catch (error) {
     return handleApiError(error, 'Update purchase invoice');
   }
 }
 
-// DELETE - Delete purchase invoice (requires delete_purchase_invoice permission).
-//
-// FORCE-DELETE policy mirrors the sales-invoice handler: cascade-clean every
-// downstream record so the user can always remove a purchase invoice.
-//
-//   1. Reverse + delete each related Payment + its allocations + JE.
-//   2. Detach (NOT delete) any PurchaseReturn referencing this invoice.
-//   3. Reverse the invoice's own JournalEntry (if any).
-//   4. Reverse stock + log adjustment inventory transactions.
-//   5. Delete invoice items + the invoice itself.
-//
-// Each downstream step uses try/catch so partial failures still let the
-// invoice be deleted.
 export async function DELETE(request: Request) {
   try {
     const user = await getAuthenticatedUser(request);
@@ -382,106 +324,43 @@ export async function DELETE(request: Request) {
       return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
     }
 
-    const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
+    const id = new URL(request.url).searchParams.get('id');
     if (!id) return apiError('معرف الفاتورة مطلوب', 400);
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
-    const tenantId = user.tenantId; // narrow
 
-    /* ── 1. Cascade-delete related Payments ── */
-    const relatedPayments = await prisma.payment.findMany({
-      where: { purchaseInvoiceId: id, tenantId: user.tenantId },
-      select: { id: true, journalEntryId: true },
-    });
-    for (const p of relatedPayments) {
-      try {
-        if (p.journalEntryId) {
-          try { await reverseJournalEntry(p.journalEntryId); }
-          catch (e) { console.warn(`  - JE reversal failed for payment ${p.id}:`, (e as Error).message); }
-        }
-        await prisma.paymentAllocation.deleteMany({ where: { paymentId: p.id } });
-        await prisma.payment.delete({ where: { id: p.id } });
-      } catch (e) {
-        console.warn(`STEP 1 WARN: payment ${p.id} cleanup failed:`, (e as Error).message);
-      }
-    }
-
-    /* ── 2. Detach PurchaseReturns ── */
     try {
-      await prisma.purchaseReturn.updateMany({
-        where: { purchaseInvoiceId: id, tenantId: user.tenantId },
-        data: { purchaseInvoiceId: null },
+      const result = await executeDeletePurchaseInvoice({
+        invoiceId: id,
+        tenantId: user.tenantId,
+        userId: user.id,
       });
-    } catch (e) {
-      console.warn('STEP 2 WARN: detach returns failed:', (e as Error).message);
-    }
 
-    /* ── 3. Reverse the invoice's own JournalEntry ── */
-    try {
-      const je = await prisma.journalEntry.findFirst({
-        where: { referenceType: 'PurchaseInvoice', referenceId: id, tenantId: user.tenantId },
-      });
-      if (je) await reverseJournalEntry(je.id);
-    } catch (e) {
-      console.warn('STEP 3 WARN: invoice JE reversal failed:', (e as Error).message);
-    }
-
-    /* ── 4. Fetch invoice + items BEFORE the deletion transaction ──
-     *
-     * Same reasoning as the sales-invoice handler: try/catch around DB
-     * calls inside `$transaction` does NOT recover from a failed query
-     * (Postgres aborts the whole transaction → 25P02 on every subsequent
-     * call).  So stock-reverse and inventory-transaction logging happen
-     * outside, each in its own try/catch.                               */
-    const invoice = await (prisma as any).purchaseInvoice.findFirst({
-      where: { id, tenantId: user.tenantId },
-      include: { items: true },
-    });
-    if (!invoice) return apiError('الفاتورة غير موجودة', 404);
-
-    /* ── 4a. Reverse stock per item (outside the tx) ── */
-    for (const item of invoice.items) {
-      try {
-        await (prisma as any).product.update({
-          where: { id: item.productId },
-          data: { stock: { decrement: item.quantity } },
-        });
-      } catch (e) {
-        console.warn(`STEP 4a WARN: stock reverse failed for ${item.productId}:`, (e as Error).message);
-      }
-      try {
-        await createInventoryTransaction(
-          prisma, item.productId, 'adjustment', -item.quantity,
-          tenantId, id,
-          'Deleted purchase invoice — stock reversed',
-        );
-      } catch (e) {
-        console.warn(`STEP 4a WARN: inventory tx log failed for ${item.productId}:`, (e as Error).message);
-      }
-    }
-
-    /* ── 5. Delete items + invoice (small atomic transaction) ── */
-    const deletedInvoice = await prisma.$transaction(async tx => {
-      await (tx as any).purchaseInvoiceItem.deleteMany({ where: { purchaseInvoiceId: id } });
-      await (tx as any).purchaseInvoice.delete({ where: { id } });
-      return invoice;
-    });
-
-    try {
       await logAuditAction(
-        user.id, 'DELETE', 'purchases', 'PurchaseInvoice', id, undefined,
+        user.id,
+        'DELETE',
+        'purchases',
+        'PurchaseInvoice',
+        id,
+        undefined,
         request.headers.get('x-forwarded-for') || undefined,
         request.headers.get('user-agent') || undefined,
       );
       await logActivity({
-        entity: 'PurchaseInvoice', entityId: id, action: 'DELETE',
-        userId: user.id, before: deletedInvoice,
+        entity: 'PurchaseInvoice',
+        entityId: id,
+        action: 'DELETE',
+        userId: user.id,
+        before: result.invoice,
       });
-    } catch (e) {
-      console.warn('AUDIT WARN:', (e as Error).message);
-    }
 
-    return apiSuccess({ id }, 'Purchase invoice deleted successfully');
+      return apiSuccess({ id }, 'Purchase invoice deleted successfully');
+    } catch (error) {
+      if (error instanceof InvoiceExecutionError) {
+        const mapped = mapExecutionError(error);
+        return apiError(mapped.body.error, mapped.status, mapped.body);
+      }
+      throw error;
+    }
   } catch (error) {
     return handleApiError(error, 'Delete purchase invoice');
   }

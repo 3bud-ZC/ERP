@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser } from '@/lib/auth';
+import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -36,27 +37,24 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { code, nameAr, nameEn, unit, cost, stock, minStock, category, description } = body;
 
-    if (!code || !nameAr || !unit) {
-      return apiError('الكود والاسم والوحدة مطلوبة', 400);
+    if (!nameAr || !unit) {
+      return apiError('الاسم والوحدة مطلوبان', 400);
     }
 
     if (!user.tenantId) {
       return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
-    // Check for duplicate code
-    const existing = await prisma.product.findUnique({
-      where: { code },
-    });
-
-    if (existing) {
-      return apiError('الكود موجود بالفعل', 400);
-    }
+    const resolvedCode = await resolveEntityCode(
+      code,
+      CODE_ENTITY_KEYS.RAW_MATERIAL,
+      user.tenantId,
+    );
 
     // @ts-ignore - Prisma type mismatch - tenant relation not in generated types
     const material = await prisma.product.create({
       data: {
-        code,
+        code: resolvedCode,
         nameAr,
         nameEn: nameEn || null,
         type: 'raw_material',

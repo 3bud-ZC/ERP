@@ -1,0 +1,25 @@
+[Unit]
+Description=ERP System Next.js application
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=erp
+Group=erp
+WorkingDirectory=/var/www/erp
+EnvironmentFile=/var/www/erp/.env
+Environment=NODE_ENV=production
+Environment=PATH=/usr/bin:/usr/local/bin
+Environment=HOME=/var/www/erp
+ExecStart=/usr/bin/env npm run start:prod
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+LimitNOFILE=65536
+SyslogIdentifier=erp-system
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target

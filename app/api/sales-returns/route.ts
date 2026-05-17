@@ -2,11 +2,12 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser, checkPermission, logAuditAction } from '@/lib/auth';
-import { transitionEntity } from '@/lib/workflow-engine';
-import { registerAllEventHandlers } from '@/lib/event-handlers';
-
-// Register event handlers on module load
-registerAllEventHandlers();
+import {
+  executeApproveSalesReturn,
+  InvoiceExecutionError,
+  mapExecutionError,
+} from '@/lib/services/invoice-execution.service';
+import { recordAuditTrail } from '@/lib/services/audit-trail.service';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
@@ -154,9 +155,6 @@ export async function POST(request: Request) {
       return newReturn;
     });
 
-    // Trigger workflow transition
-    await transitionEntity('SalesReturn', salesReturn.id, 'pending', user.id, { total });
-
     // Audit logging
     await logAuditAction(
       user.id, 'CREATE', 'sales', 'SalesReturn', salesReturn.id,
@@ -197,34 +195,55 @@ export async function PUT(request: Request) {
       return apiError('Sales return not found', 404);
     }
 
-    // Update return status
-    const updatedReturn = await (prisma as any).salesReturn.update({
+    if (status === 'approved' && existingReturn.status !== 'approved') {
+      if (!user.tenantId) return apiError('لم يتم تعيين مستأجر', 400);
+      try {
+        const result = await executeApproveSalesReturn({
+          returnId: id,
+          tenantId: user.tenantId,
+          userId: user.id,
+        });
+        await recordAuditTrail({
+          userId: user.id,
+          tenantId: user.tenantId,
+          module: 'sales',
+          entity: 'SalesReturn',
+          entityId: id,
+          action: 'APPROVE',
+          before: existingReturn,
+          after: result.salesReturn,
+          ip: request.headers.get('x-forwarded-for') || undefined,
+          userAgent: request.headers.get('user-agent') || undefined,
+        });
+        return apiSuccess(result.salesReturn, 'تم اعتماد مرتجع المبيعات');
+      } catch (error) {
+        if (error instanceof InvoiceExecutionError) {
+          const mapped = mapExecutionError(error);
+          return apiError(mapped.body.error, mapped.status, mapped.body);
+        }
+        throw error;
+      }
+    }
+
+    const updatedReturn = await prisma.salesReturn.update({
       where: { id },
-      data: {
-        status: status || existingReturn.status,
-      },
+      data: { status: status || existingReturn.status },
       include: {
         customer: true,
         salesInvoice: true,
-        items: {
-          include: {
-            product: true,
-          },
-        },
+        items: { include: { product: true } },
       },
     });
 
-    // Trigger workflow transition if status changed
-    if (status && status !== existingReturn.status) {
-      await transitionEntity('SalesReturn', id, status, user.id, { total: existingReturn.total });
-    }
-
-    // Audit logging
     await logAuditAction(
-      user.id, 'UPDATE', 'sales', 'SalesReturn', id,
+      user.id,
+      'UPDATE',
+      'sales',
+      'SalesReturn',
+      id,
       { body },
       request.headers.get('x-forwarded-for') || undefined,
-      request.headers.get('user-agent') || undefined
+      request.headers.get('user-agent') || undefined,
     );
 
     return apiSuccess(updatedReturn, 'Sales return updated successfully');

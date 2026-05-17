@@ -13,21 +13,23 @@ import {
   CheckCircle,
   DollarSign,
   ClipboardList,
+  Boxes,
+  ShoppingBag,
 } from 'lucide-react';
 import { InventoryLayout } from '@/components/inventory/InventoryLayout';
 import { KpiCard } from '@/components/accounting/AccountingLayout';
 
 interface Product {
   id: string;
-  nameAr?: string;
-  // The /api/products envelope returns these field names — earlier the
-  // hub read `quantity` / `costPrice` / `minQuantity`, which don't exist,
-  // so every KPI silently rendered as zero.
+  type?: string;
   stock?: number;
   minStock?: number;
   cost?: number;
-  price?: number;
-  isActive?: boolean;
+}
+interface ValuationRow {
+  productId: string;
+  totalValue: number;
+  averageCost: number;
 }
 interface WarehouseItem {
   id: string;
@@ -52,6 +54,14 @@ export default function InventoryHubPage() {
     queryFn: () => apiGet<Product[]>('/api/products'),
     staleTime: 60_000,
   });
+  const valuationQ = useQuery({
+    queryKey: ['inventory-valuation', 'hub'],
+    queryFn: () =>
+      apiGet<{ valuations: ValuationRow[]; summary?: { totalInventoryValue: number } }>(
+        '/api/inventory/valuation',
+      ),
+    staleTime: 60_000,
+  });
   const warehousesQ = useQuery({
     queryKey: queryKeys.warehouses,
     queryFn: () => apiGet<WarehouseItem[]>('/api/warehouses'),
@@ -61,14 +71,26 @@ export default function InventoryHubPage() {
   const products   = useMemo(() => productsQ.data   ?? [], [productsQ.data]);
   const warehouses = useMemo(() => warehousesQ.data ?? [], [warehousesQ.data]);
 
+  const valuationById = useMemo(() => {
+    const m = new Map<string, ValuationRow>();
+    for (const v of valuationQ.data?.valuations ?? []) m.set(v.productId, v);
+    return m;
+  }, [valuationQ.data]);
+
   const stats = useMemo(() => {
-    let stockValue = 0;
+    let stockValue = valuationQ.data?.summary?.totalInventoryValue ?? 0;
     let lowStock = 0;
     let outOfStock = 0;
+    let rawCount = 0;
+    let fgCount = 0;
     for (const p of products) {
       const qty = Number(p.stock ?? 0);
-      const cost = Number(p.cost ?? 0);
-      stockValue += qty * cost;
+      if (p.type === 'raw_material') rawCount++;
+      else if (p.type === 'finished_product') fgCount++;
+      if (!valuationQ.data?.summary) {
+        const v = valuationById.get(p.id);
+        stockValue += v?.totalValue ?? qty * (p.cost ?? 0);
+      }
       const threshold = Number(p.minStock ?? 0);
       if (qty <= 0) outOfStock++;
       else if (threshold > 0 && qty <= threshold) lowStock++;
@@ -76,18 +98,20 @@ export default function InventoryHubPage() {
     const activeWarehouses = warehouses.filter(w => w.isActive !== false).length;
     return {
       productsCount: products.length,
+      rawCount,
+      fgCount,
       stockValue,
       lowStock,
       outOfStock,
       warehousesCount: warehouses.length,
       activeWarehouses,
     };
-  }, [products, warehouses]);
+  }, [products, warehouses, valuationById, valuationQ.data]);
 
   return (
     <InventoryLayout
       title="المخازن"
-      subtitle="إدارة المنتجات وتسويات المخزون والمستودعات"
+      subtitle="مواد خام · منتجات نهائية · مستودعات · تسويات"
     >
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
@@ -120,11 +144,19 @@ export default function InventoryHubPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <NavCard
-          href="/inventory/products"
-          title="المنتجات"
-          description="إدارة كتالوج المنتجات والأسعار وكميات المخزون"
-          icon={Package}
-          stat={`${stats.productsCount} منتج`}
+          href="/inventory/raw-materials"
+          title="المواد الخام"
+          description="مشتريات، تكلفة متوسطة، مستودعات، وتنبيهات إعادة الطلب"
+          icon={Boxes}
+          stat={`${stats.rawCount} مادة خام`}
+          accentClass="bg-amber-50 text-amber-600"
+        />
+        <NavCard
+          href="/inventory/finished-products"
+          title="المنتجات النهائية"
+          description="تسعير، هامش ربح، مخزون جاهز، وربط أوامر الإنتاج"
+          icon={ShoppingBag}
+          stat={`${stats.fgCount} منتج نهائي`}
           accentClass="bg-blue-50 text-blue-600"
         />
         <NavCard

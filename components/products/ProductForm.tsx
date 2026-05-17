@@ -46,12 +46,20 @@ const empty = {
 export function ProductForm({
   mode,
   existing,
+  lockedType,
+  backHref = '/inventory/products',
+  listHref = '/inventory/products',
 }: {
-  mode:      'create' | 'edit';
-  existing?: ProductExisting;
+  mode:       'create' | 'edit';
+  existing?:  ProductExisting;
+  lockedType?: 'raw_material' | 'finished_product';
+  backHref?:   string;
+  listHref?:   string;
 }) {
   const router = useRouter();
   const [toast, showToast] = useToast();
+
+  const defaultType = lockedType ?? 'finished_product';
 
   const [form, setForm] = useState(() =>
     existing
@@ -59,7 +67,7 @@ export function ProductForm({
           code:        existing.code,
           nameAr:      existing.nameAr,
           nameEn:      existing.nameEn ?? '',
-          type:        existing.type    ?? 'finished_product',
+          type:        lockedType ?? existing.type ?? 'finished_product',
           unit:        existing.unit    ?? 'قطعة',
           price:       existing.price != null ? String(existing.price) : '',
           cost:        existing.cost  != null ? String(existing.cost)  : '',
@@ -67,7 +75,7 @@ export function ProductForm({
           minStock:    existing.minStock != null ? String(existing.minStock) : '',
           warehouseId: existing.warehouseId ?? '',
         }
-      : empty,
+      : { ...empty, type: defaultType },
   );
 
   // Pull active warehouses for the picker. Same shape returned across the app.
@@ -96,7 +104,7 @@ export function ProductForm({
               code:   form.code.trim(),
               nameAr: form.nameAr.trim(),
               ...(form.nameEn && { nameEn: form.nameEn.trim() }),
-              type:   form.type,
+              type:   lockedType ?? form.type,
               unit:   form.unit || 'قطعة',
               price:  Number(form.price) || 0,
               cost:   Number(form.cost)  || 0,
@@ -127,7 +135,7 @@ export function ProductForm({
 
       if (j.success) {
         showToast(mode === 'create' ? 'تم إضافة المنتج بنجاح' : 'تم تحديث بيانات المنتج', 'success');
-        setTimeout(() => router.push('/inventory/products'), 600);
+        setTimeout(() => router.push(listHref), 600);
       } else {
         setError(j.message || j.error || 'فشل الحفظ');
         setSaving(false);
@@ -148,7 +156,7 @@ export function ProductForm({
             ? 'أدخل بيانات المنتج في الأقسام التالية'
             : existing?.nameAr
         }
-        backHref="/inventory/products"
+        backHref={backHref}
         icon={<Package className="w-5 h-5" />}
         error={error}
         saving={saving}
@@ -167,11 +175,21 @@ export function ProductForm({
             <FieldGrid>
               <Field label="الرمز" required value={form.code} placeholder="PRD-001"
                 onChange={e => setForm(f => ({ ...f, code: e.target.value }))} />
-              <SelectField label="النوع" value={form.type}
-                onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
-                <option value="finished_product">منتج نهائي</option>
-                <option value="raw_material">مواد خام</option>
-              </SelectField>
+              {lockedType ? (
+                <Field
+                  label="النوع"
+                  value={lockedType === 'raw_material' ? 'مواد خام' : 'منتج نهائي'}
+                  readOnly
+                  disabled
+                  onChange={() => {}}
+                />
+              ) : (
+                <SelectField label="النوع" value={form.type}
+                  onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
+                  <option value="finished_product">منتج نهائي</option>
+                  <option value="raw_material">مواد خام</option>
+                </SelectField>
+              )}
               <Field label="الاسم بالعربية" required value={form.nameAr} placeholder="اسم المنتج"
                 className="sm:col-span-2"
                 onChange={e => setForm(f => ({ ...f, nameAr: e.target.value }))} />

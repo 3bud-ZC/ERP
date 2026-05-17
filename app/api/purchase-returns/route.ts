@@ -2,11 +2,12 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser, checkPermission, logAuditAction } from '@/lib/auth';
-import { transitionEntity } from '@/lib/workflow-engine';
-import { registerAllEventHandlers } from '@/lib/event-handlers';
-
-// Register event handlers on module load
-registerAllEventHandlers();
+import {
+  executeApprovePurchaseReturn,
+  InvoiceExecutionError,
+  mapExecutionError,
+} from '@/lib/services/invoice-execution.service';
+import { recordAuditTrail } from '@/lib/services/audit-trail.service';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
@@ -154,9 +155,6 @@ export async function POST(request: Request) {
       return newReturn;
     });
 
-    // Trigger workflow transition
-    await transitionEntity('PurchaseReturn', purchaseReturn.id, 'pending', user.id, { total });
-
     // Audit logging
     await logAuditAction(
       user.id, 'CREATE', 'purchase', 'PurchaseReturn', purchaseReturn.id,
@@ -197,34 +195,55 @@ export async function PUT(request: Request) {
       return apiError('Purchase return not found', 404);
     }
 
-    // Update return status
-    const updatedReturn = await (prisma as any).purchaseReturn.update({
+    if (status === 'approved' && existingReturn.status !== 'approved') {
+      if (!user.tenantId) return apiError('لم يتم تعيين مستأجر', 400);
+      try {
+        const result = await executeApprovePurchaseReturn({
+          returnId: id,
+          tenantId: user.tenantId,
+          userId: user.id,
+        });
+        await recordAuditTrail({
+          userId: user.id,
+          tenantId: user.tenantId,
+          module: 'purchases',
+          entity: 'PurchaseReturn',
+          entityId: id,
+          action: 'APPROVE',
+          before: existingReturn,
+          after: result.purchaseReturn,
+          ip: request.headers.get('x-forwarded-for') || undefined,
+          userAgent: request.headers.get('user-agent') || undefined,
+        });
+        return apiSuccess(result.purchaseReturn, 'تم اعتماد مرتجع المشتريات');
+      } catch (error) {
+        if (error instanceof InvoiceExecutionError) {
+          const mapped = mapExecutionError(error);
+          return apiError(mapped.body.error, mapped.status, mapped.body);
+        }
+        throw error;
+      }
+    }
+
+    const updatedReturn = await prisma.purchaseReturn.update({
       where: { id },
-      data: {
-        status: status || existingReturn.status,
-      },
+      data: { status: status || existingReturn.status },
       include: {
         supplier: true,
         purchaseInvoice: true,
-        items: {
-          include: {
-            product: true,
-          },
-        },
+        items: { include: { product: true } },
       },
     });
 
-    // Trigger workflow transition if status changed
-    if (status && status !== existingReturn.status) {
-      await transitionEntity('PurchaseReturn', id, status, user.id, { total: existingReturn.total });
-    }
-
-    // Audit logging
     await logAuditAction(
-      user.id, 'UPDATE', 'purchase', 'PurchaseReturn', id,
+      user.id,
+      'UPDATE',
+      'purchases',
+      'PurchaseReturn',
+      id,
       { body },
       request.headers.get('x-forwarded-for') || undefined,
-      request.headers.get('user-agent') || undefined
+      request.headers.get('user-agent') || undefined,
     );
 
     return apiSuccess(updatedReturn, 'Purchase return updated successfully');

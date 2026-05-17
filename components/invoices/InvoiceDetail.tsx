@@ -11,6 +11,7 @@ import {
   InvoiceConfig, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, fmtDate,
 } from './InvoiceConfig';
 import { InvoiceLayout } from './InvoiceLayout';
+import { DocumentStatusBadge } from './DocumentStatusBadge';
 import { cn } from '@/lib/utils';
 
 interface DetailItem {
@@ -175,14 +176,18 @@ export function InvoiceDetail({ config }: { config: InvoiceConfig }) {
         {/* Status */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
           <h3 className="text-xs font-semibold text-slate-500 mb-2">الحالة</h3>
-          <div className="flex items-center gap-2 mb-2">
-            <span className={cn('inline-block px-2.5 py-1 rounded-full text-xs border', statusInfo.cls)}>
-              {statusInfo.label}
-            </span>
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <DocumentStatusBadge status={inv.status} label={statusInfo.label} />
             <span className={cn('inline-block px-2.5 py-1 rounded-full text-xs border', payInfo.cls)}>
               {payInfo.label}
             </span>
           </div>
+          {totals.paid > 0 && (
+            <p className="text-xs text-slate-500 flex items-center gap-1 mb-1">
+              <Wallet className="w-3 h-3" />
+              مدفوع: {fmtMoney(totals.paid)} من {fmtMoney(totals.grand)}
+            </p>
+          )}
           {(inv.paymentTermsDays ?? 0) > 0 && (
             <p className="text-xs text-slate-500">شروط الدفع: خلال {inv.paymentTermsDays} يوم</p>
           )}

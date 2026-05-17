@@ -11,9 +11,16 @@ import { createInventoryTransaction } from '@/lib/inventory-transactions';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { logActivity } from '@/lib/activity-log';
-import { 
-  createSalesInvoiceAtomic
-} from '@/lib/erp-execution-engine/services/atomic-transaction-service';
+import {
+  executeCreateSalesInvoice,
+  executeUpdateSalesInvoice,
+  executeCancelSalesInvoice,
+  executeDeleteSalesInvoice,
+  InvoiceExecutionError,
+  mapExecutionError,
+} from '@/lib/services/invoice-execution.service';
+import { mapExecutionItems } from '@/lib/utils/map-execution-items';
+import { recordAuditTrail } from '@/lib/services/audit-trail.service';
 import { resolveInvoiceNumber } from '@/lib/invoice-numbering';
 
 /**
@@ -224,13 +231,43 @@ export async function POST(request: Request) {
         user.tenantId,
       );
 
-      const result = await createSalesInvoiceAtomic({
+      const result = await executeCreateSalesInvoice({
         invoiceData: {
-          ...safeInvoiceData,
           invoiceNumber,
           date: safeInvoiceData.date ? new Date(safeInvoiceData.date) : new Date(),
+          customerId: safeInvoiceData.customerId,
+          notes: safeInvoiceData.notes,
+          status: safeInvoiceData.status,
+          paymentStatus: safeInvoiceData.paymentStatus,
+          paidAmount: safeInvoiceData.paidAmount,
+          paymentTermsDays: safeInvoiceData.paymentTermsDays,
+          issueDate: safeInvoiceData.issueDate ? new Date(safeInvoiceData.issueDate) : undefined,
+          salesRepId: safeInvoiceData.salesRepId,
+          currency: safeInvoiceData.currency,
+          template: safeInvoiceData.template,
+          salesOrderId: safeInvoiceData.salesOrderId,
+          discount: safeInvoiceData.discount,
+          discountPercent: body.discountPercent,
+          taxRate: safeInvoiceData.taxRate ?? body.taxRate,
+          tax: safeInvoiceData.tax,
+          extraCharges: body.extraCharges,
+          taxMode: body.taxMode,
         },
-        items,
+        items: items.map((item: {
+          productId: string;
+          quantity: number;
+          price: number;
+          discountPercent?: number;
+          taxRate?: number;
+          description?: string;
+        }) => ({
+          productId: item.productId,
+          quantity: Number(item.quantity),
+          price: Number(item.price),
+          discountPercent: item.discountPercent,
+          taxRate: item.taxRate,
+          description: item.description,
+        })),
         tenantId: user.tenantId,
         userId: user.id,
       });
@@ -240,6 +277,10 @@ export async function POST(request: Request) {
       await dualRunCompareById('SalesInvoice:POST', (result as any)?.journalEntry?.id);
     } catch (txnErr: any) {
       console.error(`${requestId} ✗ Invoice creation transaction failed:`, txnErr);
+      if (txnErr instanceof InvoiceExecutionError) {
+        const status = txnErr.code === 'INVENTORY_FAILED' ? 409 : txnErr.code === 'VALIDATION_FAILED' ? 400 : 500;
+        return apiError(txnErr.message, status);
+      }
       const txnMsg = translateSalesError(txnErr);
       return apiError(txnMsg || 'فشل إنشاء الفاتورة', 500);
     }
@@ -294,345 +335,159 @@ export async function POST(request: Request) {
   }
 }
 
-// PUT - Update sales invoice (requires update_sales_invoice permission).
-//
-// FORCE-SAVE policy: the user explicitly wants every edit to persist, even
-// when downstream side-effects (stock validation, journal entries, audit
-// logs) fail. The approach:
-//
-//   - Sanitize the items array (drop bad rows) instead of throwing.
-//   - Skip stock-availability validation (we used to 400 here).
-//   - Wrap journal-entry reversal/creation in try/catch.
-//   - Wrap audit/activity logs in try/catch.
-//   - Only fail if the invoice itself can't be saved (not-found, schema
-//     mismatch, or DB connection error).
-//
-// Warnings are returned alongside the success payload so the UI can surface
-// them to the user without blocking the save.
+// PUT — canonical update: reverse + republish stock/GL atomically (Phase 5B).
 export async function PUT(request: Request) {
   try {
-    console.log('=== START SALES INVOICE UPDATE ===');
-
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!checkPermission(user, 'update_sales_invoice')) {
       return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
     }
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
-    const tenantId = user.tenantId; // narrow the type for the closures below
 
     const body = await request.json();
-    const { id: bodyId, items: rawItems, ...invoiceData } = body;
-    // Accept id from either query string (?id=...) or body for resilience.
+    const { id: bodyId, items: rawItems, discountPercent, taxRate, taxMode, extraCharges, ...invoiceData } = body;
     const queryId = new URL(request.url).searchParams.get('id');
     const id = bodyId || queryId;
     if (!id) return apiError('Invoice ID missing', 400);
 
-    // Normalize date fields — the form sends "YYYY-MM-DD" which Prisma's
-    // DateTime field rejects ("premature end of input").
     normalizeInvoiceDates(invoiceData);
 
-    /* ── Sanitize items: drop empty / invalid rows instead of failing ── */
-    const items: any[] = Array.isArray(rawItems)
-      ? rawItems
-          .filter((it: any) =>
-            it && it.productId && Number(it.quantity) > 0 && Number(it.price) >= 0,
-          )
-          .map((it: any) => {
-            const qty   = Number(it.quantity) || 0;
-            const price = Number(it.price)    || 0;
-            return {
-              productId:   it.productId,
-              description: it.description ?? null,
-              quantity:    qty,
-              price:       price,
-              total:       qty * price,
-            };
-          })
-      : [];
-    if (items.length === 0) {
-      return apiError('يجب أن تحتوي الفاتورة على صنف واحد على الأقل بكمية وسعر صالحين', 400);
-    }
-
-    /* ── Header-level discount: prefer `discount` (money) over % ── */
-    const subtotal = items.reduce(
-      (s: number, it: any) => s + Number(it.quantity) * Number(it.price), 0,
-    );
-    const explicitDisc = Number(invoiceData.discount ?? 0);
-    const discPct      = Number(invoiceData.discountPercent ?? 0);
-    const headerDisc   = explicitDisc > 0
-      ? explicitDisc
-      : (subtotal * Math.max(0, Math.min(100, discPct))) / 100;
-    invoiceData.discount   = headerDisc;
-    invoiceData.total      = subtotal;
-    invoiceData.grandTotal = Math.max(0, subtotal - headerDisc);
-    // `discountPercent` isn't a column on SalesInvoice — drop it before update.
-    delete invoiceData.discountPercent;
-
-    const warnings: string[] = [];
-
-    /* ── 1. Fetch existing invoice (tenant-scoped) ── */
     const existingInvoice = await prisma.salesInvoice.findFirst({
       where: { id, tenantId: user.tenantId },
       include: { items: true },
     });
     if (!existingInvoice) return apiError('Invoice not found or unauthorized', 404);
 
-    /* ── 2. Compute net per-product stock deltas (new - old) ── */
-    const oldItemMap = new Map(existingInvoice.items.map((i: any) => [i.productId, i.quantity]));
-    const newItemMap = new Map(items.map((i: any) => [i.productId, i.quantity]));
-    const stockDeltas: { productId: string; delta: number }[] = [];
-    const allProductIds = new Set([
-      ...Array.from(oldItemMap.keys()),
-      ...Array.from(newItemMap.keys()),
-    ]);
-    for (const productId of Array.from(allProductIds)) {
-      const oldQty = (oldItemMap.get(productId) as number) || 0;
-      const newQty = (newItemMap.get(productId) as number) || 0;
-      const delta = newQty - oldQty;
-      if (delta !== 0) stockDeltas.push({ productId, delta });
-    }
-
-    /* ── 3. Stock availability — warn only, don't block ── */
-    try {
-      const needsValidation = stockDeltas
-        .filter(d => d.delta > 0)
-        .map(d => ({ productId: d.productId, quantity: d.delta }));
-      if (needsValidation.length > 0) {
-        const v = await validateStockAvailability(needsValidation);
-        if (!v.valid) {
-          warnings.push('الفاتورة تم حفظها رغم عدم كفاية المخزون لبعض الأصناف');
-          console.warn('STEP 3 WARN: stock validation failed (continuing):', v.errors);
-        }
-      }
-    } catch (e) {
-      console.warn('STEP 3 WARN: validateStockAvailability threw:', (e as Error).message);
-    }
-
-    /* ── 4. Reverse existing journal entry (best-effort) ── */
-    try {
-      const existingJE = await prisma.journalEntry.findFirst({
-        where: { referenceType: 'SalesInvoice', referenceId: id },
+    if (invoiceData.status === 'cancelled') {
+      const cancelResult = await executeCancelSalesInvoice({
+        invoiceId: id,
+        tenantId: user.tenantId,
+        userId: user.id,
       });
-      if (existingJE) {
-        await reverseJournalEntry(existingJE.id);
-      }
-    } catch (e) {
-      warnings.push('تعذّر عكس القيد المحاسبي القديم — تم حفظ الفاتورة على أي حال');
-      console.warn('STEP 4 WARN:', (e as Error).message);
+      await recordAuditTrail({
+        userId: user.id,
+        tenantId: user.tenantId,
+        module: 'sales',
+        entity: 'SalesInvoice',
+        entityId: id,
+        action: 'CANCEL',
+        before: existingInvoice,
+        after: cancelResult.invoice,
+        ip: request.headers.get('x-forwarded-for') || undefined,
+        userAgent: request.headers.get('user-agent') || undefined,
+      });
+      return apiSuccess(cancelResult.invoice, 'تم إلغاء الفاتورة');
     }
 
-    /* ── 5. Update invoice + apply stock deltas atomically ── */
-    const invoice = await prisma.$transaction(async (tx: any) => {
-      await tx.salesInvoiceItem.deleteMany({ where: { salesInvoiceId: id } });
+    const items = mapExecutionItems(rawItems ?? []);
+    if (items.length === 0) {
+      return apiError('يجب أن تحتوي الفاتورة على صنف واحد على الأقل', 400);
+    }
 
-      const updatedInvoice = await tx.salesInvoice.update({
-        where: { id },
-        data: { ...invoiceData, items: { create: items } },
-        include: { items: true },
+    const validation = await validateStockAvailability(items);
+    if (!validation.valid) {
+      return apiError('رصيد المخزون غير كافٍ', 409, { details: validation.errors });
+    }
+
+    try {
+      const result = await executeUpdateSalesInvoice({
+        invoiceId: id,
+        tenantId: user.tenantId,
+        userId: user.id,
+        invoiceData: {
+          customerId: invoiceData.customerId,
+          date: invoiceData.date ? new Date(invoiceData.date) : undefined,
+          notes: invoiceData.notes,
+          status: invoiceData.status,
+          paymentStatus: invoiceData.paymentStatus,
+          paidAmount: invoiceData.paidAmount,
+          discount: invoiceData.discount,
+          discountPercent,
+          taxRate: invoiceData.taxRate ?? taxRate,
+          tax: invoiceData.tax,
+          extraCharges,
+          taxMode,
+        },
+        items,
+        republish: true,
       });
 
-      for (const d of stockDeltas) {
-        try {
-          await tx.product.update({
-            where: { id: d.productId },
-            data: { stock: { decrement: d.delta } },
-          });
-          await createInventoryTransaction(
-            tx, d.productId, 'adjustment', -d.delta,
-            tenantId, id,
-            'Sales invoice updated — stock quantity adjusted',
-          );
-        } catch (e) {
-          console.warn(`STEP 5 WARN: stock adjustment failed for ${d.productId}:`, (e as Error).message);
-        }
-      }
-      return updatedInvoice;
-    });
+      await recordAuditTrail({
+        userId: user.id,
+        tenantId: user.tenantId,
+        module: 'sales',
+        entity: 'SalesInvoice',
+        entityId: id,
+        action: result.republished ? 'POST' : 'UPDATE',
+        before: existingInvoice,
+        after: result.invoice,
+        ip: request.headers.get('x-forwarded-for') || undefined,
+        userAgent: request.headers.get('user-agent') || undefined,
+        metadata: { republished: result.republished },
+      });
 
-    /* ── 6. Recreate the journal entry with the new total (best-effort) ── */
-    try {
-      const newTotal = items.reduce((s: number, it: any) => s + Number(it.quantity) * Number(it.price), 0);
-      const newJE = await createSalesInvoiceEntry(invoice.id, newTotal, user.tenantId);
-      if (newJE) {
-        await postJournalEntry(newJE.id);
-        await dualRunCompare('SalesInvoice:PUT', newJE);
-      }
-    } catch (e) {
-      warnings.push('تعذّر إنشاء القيد المحاسبي الجديد — تم حفظ الفاتورة على أي حال');
-      console.warn('STEP 6 WARN:', (e as Error).message);
-    }
-
-    /* ── 7. Audit + activity log (best-effort) ── */
-    try {
-      await logAuditAction(
-        user.id, 'UPDATE', 'sales', 'SalesInvoice', invoice.id, { invoice },
-        request.headers.get('x-forwarded-for') || undefined,
-        request.headers.get('user-agent') || undefined,
+      return apiSuccess(
+        { ...result.invoice, republished: result.republished },
+        result.republished ? 'تم تحديث الفاتورة وإعادة ترحيلها' : 'تم تحديث الفاتورة',
       );
-      await logActivity({
-        entity: 'SalesInvoice', entityId: invoice.id, action: 'UPDATE',
-        userId: user.id, before: existingInvoice, after: invoice,
-      });
-    } catch (e) {
-      console.warn('AUDIT WARN:', (e as Error).message);
+    } catch (error) {
+      if (error instanceof InvoiceExecutionError) {
+        const mapped = mapExecutionError(error);
+        return apiError(mapped.body.error, mapped.status, mapped.body);
+      }
+      throw error;
     }
-
-    console.log('=== END SUCCESS: Sales invoice updated ===', { invoiceId: invoice.id, warnings: warnings.length });
-    return apiSuccess(
-      { ...invoice, warnings: warnings.length ? warnings : undefined },
-      warnings.length
-        ? 'تم حفظ الفاتورة مع تحذيرات'
-        : 'Sales invoice updated successfully',
-    );
   } catch (error) {
     return handleApiError(error, 'Update sales invoice');
   }
 }
 
-// DELETE - Delete sales invoice (requires delete_sales_invoice permission).
-//
-// FORCE-DELETE policy: the user explicitly wants every sales-invoice action
-// (create / edit / delete) to succeed reliably.  This handler therefore
-// cascades through *every* downstream record that would otherwise raise an
-// FK violation:
-//
-//   1. Reverse + delete each related Payment + its allocations + its JE.
-//   2. Detach (NOT delete) any SalesReturn that referenced this invoice.
-//      Returns are independent accounting events; we only null-out the FK.
-//   3. Reverse the invoice's own JournalEntry (if any).
-//   4. Restore stock and create reversal inventory transactions.
-//   5. Delete invoice items + the invoice itself.
-//
-// Each downstream step is wrapped in a try/catch that *logs but does not
-// abort* — partial cascade failures should not prevent the invoice from
-// being deleted.  The only fatal error is "invoice not found".
 export async function DELETE(request: Request) {
   try {
-    console.log('=== START SALES INVOICE DELETE ===');
-
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!checkPermission(user, 'delete_sales_invoice')) {
       return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
     }
 
-    const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
+    const id = new URL(request.url).searchParams.get('id');
     if (!id) return apiError('Invoice ID missing', 400);
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
-    const tenantId = user.tenantId; // narrow
 
-    console.log('REQUEST:', { invoiceId: id, tenantId });
-
-    /* ── 1. Cascade-delete related Payments (with their JE + allocations) ── */
-    const relatedPayments = await prisma.payment.findMany({
-      where: { salesInvoiceId: id, tenantId: user.tenantId },
-      select: { id: true, journalEntryId: true },
-    });
-    console.log(`STEP 1: Found ${relatedPayments.length} related payment(s) to cascade`);
-    for (const p of relatedPayments) {
-      try {
-        // Reverse the payment's own journal entry first so account balances
-        // stay correct.  We swallow errors so a single bad JE never blocks
-        // the wider delete operation.
-        if (p.journalEntryId) {
-          try { await reverseJournalEntry(p.journalEntryId); }
-          catch (e) { console.warn(`  - JE reversal failed for payment ${p.id}:`, (e as Error).message); }
-        }
-        await prisma.paymentAllocation.deleteMany({ where: { paymentId: p.id } });
-        await prisma.payment.delete({ where: { id: p.id } });
-      } catch (e) {
-        console.warn(`STEP 1 WARN: Could not fully clean payment ${p.id}:`, (e as Error).message);
-      }
-    }
-
-    /* ── 2. Detach SalesReturns (don't delete; they're independent docs) ── */
     try {
-      const detached = await prisma.salesReturn.updateMany({
-        where: { salesInvoiceId: id, tenantId: user.tenantId },
-        data: { salesInvoiceId: null },
+      const result = await executeDeleteSalesInvoice({
+        invoiceId: id,
+        tenantId: user.tenantId,
+        userId: user.id,
       });
-      if (detached.count > 0) {
-        console.log(`STEP 2: Detached ${detached.count} sales return(s)`);
-      }
-    } catch (e) {
-      console.warn('STEP 2 WARN: detach returns failed:', (e as Error).message);
-    }
 
-    /* ── 3. Reverse the invoice's own JournalEntry ── */
-    try {
-      const je = await prisma.journalEntry.findFirst({
-        where: { referenceType: 'SalesInvoice', referenceId: id, tenantId: user.tenantId },
-      });
-      if (je) {
-        await reverseJournalEntry(je.id);
-        console.log('STEP 3: Invoice JE reversed');
-      }
-    } catch (e) {
-      console.warn('STEP 3 WARN: invoice JE reversal failed:', (e as Error).message);
-    }
-
-    /* ── 4. Fetch invoice + items BEFORE the deletion transaction ──
-     *
-     * IMPORTANT: stock-restore and inventory-transaction logging must run
-     * OUTSIDE the deletion transaction.  Wrapping a failing DB call in
-     * try/catch *inside* `$transaction` does NOT recover — Postgres aborts
-     * the whole transaction and every subsequent query fails with 25P02
-     * ("current transaction is aborted").  So we do the optional bits
-     * separately, then run a tiny atomic transaction for the actual
-     * delete which has no FK risk left.                                  */
-    const invoice = await prisma.salesInvoice.findFirst({
-      where: { id, tenantId: user.tenantId },
-      include: { items: true },
-    });
-    if (!invoice) return apiError('Invoice not found or unauthorized', 404);
-
-    /* ── 4a. Restore stock per item (each in its own try/catch) ── */
-    for (const item of invoice.items) {
-      try {
-        await prisma.product.update({
-          where: { id: item.productId },
-          data: { stock: { increment: item.quantity } },
-        });
-      } catch (e) {
-        console.warn(`STEP 4a WARN: stock restore failed for ${item.productId}:`, (e as Error).message);
-      }
-      try {
-        await createInventoryTransaction(
-          prisma, item.productId, 'adjustment', item.quantity,
-          tenantId, id,
-          'Deleted sales invoice — stock restored',
-        );
-      } catch (e) {
-        console.warn(`STEP 4a WARN: inventory tx log failed for ${item.productId}:`, (e as Error).message);
-      }
-    }
-
-    /* ── 5. Delete items + invoice (small atomic transaction) ── */
-    const deletedInvoice = await prisma.$transaction(async tx => {
-      await tx.salesInvoiceItem.deleteMany({ where: { salesInvoiceId: id } });
-      await tx.salesInvoice.delete({ where: { id } });
-      return invoice;
-    });
-
-    /* ── Audit + activity log (non-fatal) ── */
-    try {
       await logAuditAction(
-        user.id, 'DELETE', 'sales', 'SalesInvoice', id, undefined,
+        user.id,
+        'DELETE',
+        'sales',
+        'SalesInvoice',
+        id,
+        undefined,
         request.headers.get('x-forwarded-for') || undefined,
         request.headers.get('user-agent') || undefined,
       );
       await logActivity({
-        entity: 'SalesInvoice', entityId: id, action: 'DELETE',
-        userId: user.id, before: deletedInvoice,
+        entity: 'SalesInvoice',
+        entityId: id,
+        action: 'DELETE',
+        userId: user.id,
+        before: result.invoice,
       });
-    } catch (e) {
-      console.warn('AUDIT WARN:', (e as Error).message);
-    }
 
-    console.log('=== END SUCCESS: Sales invoice deleted ===', { invoiceId: id });
-    return apiSuccess({ id }, 'Sales invoice deleted successfully');
+      return apiSuccess({ id }, 'Sales invoice deleted successfully');
+    } catch (error) {
+      if (error instanceof InvoiceExecutionError) {
+        const mapped = mapExecutionError(error);
+        return apiError(mapped.body.error, mapped.status, mapped.body);
+      }
+      throw error;
+    }
   } catch (error) {
     return handleApiError(error, 'Delete sales invoice');
   }

@@ -1,4 +1,5 @@
 import { supplierRepo } from '@/lib/repositories/supplier.repo';
+import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
@@ -43,8 +44,14 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const { tenantId: _t, ...supplierData } = body;
+    const code = await resolveEntityCode(
+      supplierData.code,
+      CODE_ENTITY_KEYS.SUPPLIER,
+      user.tenantId,
+    );
+
     const supplier = await supplierRepo.create({
-      code: supplierData.code,
+      code,
       nameAr: supplierData.nameAr,
       ...(supplierData.nameEn && { nameEn: supplierData.nameEn }),
       ...(supplierData.phone && { phone: supplierData.phone }),

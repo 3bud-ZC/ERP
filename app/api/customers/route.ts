@@ -1,4 +1,5 @@
 import { customerRepo } from '@/lib/repositories/customer.repo';
+import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
@@ -46,8 +47,14 @@ export async function POST(request: Request) {
     // Remove tenantId from body if present - will be set from user context
     const { tenantId, ...customerData } = body;
     
+    const code = await resolveEntityCode(
+      customerData.code,
+      CODE_ENTITY_KEYS.CUSTOMER,
+      user.tenantId,
+    );
+
     const customer = await customerRepo.create({
-      code: customerData.code,
+      code,
       nameAr: customerData.nameAr,
       nameEn: customerData.nameEn,
       email: customerData.email,

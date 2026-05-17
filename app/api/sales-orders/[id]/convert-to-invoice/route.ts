@@ -1,143 +1,104 @@
-import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser, checkPermission, logAuditAction } from '@/lib/auth';
-import { transitionEntity } from '@/lib/workflow-engine';
-import { registerAllEventHandlers } from '@/lib/event-handlers';
+import { resolveInvoiceNumber } from '@/lib/invoice-numbering';
+import {
+  executeCreateSalesInvoice,
+  InvoiceExecutionError,
+  mapExecutionError,
+} from '@/lib/services/invoice-execution.service';
+import { recordAuditTrail } from '@/lib/services/audit-trail.service';
 
-// Register event handlers on module load
-registerAllEventHandlers();
-
-// Disable caching for real-time data
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// POST - Convert Sales Order to Sales Invoice
+/** POST — full SO → invoice via canonical execution (stock + GL + costing). */
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!checkPermission(user, 'create_sales_invoice')) return apiError('ليس لديك صلاحية', 403);
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر', 400);
 
     const { id } = params;
 
-    // Check if sales order exists
-    const salesOrder = await (prisma as any).salesOrder.findUnique({
-      where: { id },
+    const salesOrder = await prisma.salesOrder.findFirst({
+      where: { id, tenantId: user.tenantId },
       include: {
         customer: true,
-        items: {
-          include: {
-            product: true,
-          },
-        },
+        items: { include: { product: true } },
+        salesInvoices: { select: { id: true } },
       },
     });
 
-    if (!salesOrder) {
-      return apiError('Sales order not found', 404);
-    }
+    if (!salesOrder) return apiError('Sales order not found', 404);
 
-    // Check if order is already invoiced
     if (salesOrder.salesInvoices && salesOrder.salesInvoices.length > 0) {
       return apiError('Sales order already has invoices', 400);
     }
 
-    // Validate stock availability for all items
-    for (const item of salesOrder.items) {
-      if (item.product.stock < item.quantity) {
-        return apiError(
-          `Insufficient stock for product ${item.product.nameAr || item.product.nameEn}. Available: ${item.product.stock}, Required: ${item.quantity}`,
-          400
-        );
-      }
-    }
+    const invoiceItems = salesOrder.items.map(item => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      price: item.price,
+    }));
 
-    // Generate invoice number
-    const lastInvoice = await (prisma as any).salesInvoice.findFirst({
-      orderBy: { invoiceNumber: 'desc' },
-    });
-    const nextNumber = lastInvoice ? parseInt(lastInvoice.invoiceNumber.slice(3)) + 1 : 1;
-    const invoiceNumber = `SI-${String(nextNumber).padStart(6, '0')}`;
+    const invoiceNumber = await resolveInvoiceNumber(null, 'INV', user.tenantId);
 
-    // Calculate totals
-    let total = 0;
-    const invoiceItems = salesOrder.items.map((item: any) => {
-      const itemTotal = item.quantity * item.price;
-      total += itemTotal;
-      return {
-        productId: item.productId,
-        quantity: item.quantity,
-        price: item.price,
-        total: itemTotal,
-      };
-    });
-
-    const discount = salesOrder.discount || 0;
-    const tax = (total - discount) * 0.15;
-    const grandTotal = total - discount + tax;
-
-    // Create invoice with transaction
-    const invoice = await prisma.$transaction(async (tx) => {
-      // Create sales invoice
-      const newInvoice = await (tx as any).salesInvoice.create({
-        data: {
+    try {
+      const result = await executeCreateSalesInvoice({
+        invoiceData: {
           invoiceNumber,
-          customerId: salesOrder.customerId,
           date: new Date(),
-          status: 'pending',
-          paymentStatus: 'credit',
-          paidAmount: 0,
-          notes: salesOrder.notes,
-          total,
-          tax,
-          grandTotal,
+          customerId: salesOrder.customerId,
           salesOrderId: salesOrder.id,
-          items: {
-            create: invoiceItems,
-          },
+          notes: salesOrder.notes ?? undefined,
+          status: 'posted',
+          paymentStatus: 'unpaid',
+          discount: salesOrder.discount ?? undefined,
+          tax: salesOrder.tax > 0 ? salesOrder.tax : undefined,
         },
-        include: {
-          customer: true,
-          items: {
-            include: {
-              product: true,
-            },
-          },
-        },
+        items: invoiceItems,
+        tenantId: user.tenantId,
+        userId: user.id,
       });
 
-      // Update sales order status
-      await (tx as any).salesOrder.update({
+      await prisma.salesOrder.update({
         where: { id: salesOrder.id },
-        data: {
-          status: 'invoiced',
-        },
+        data: { status: 'invoiced' },
       });
 
-      return newInvoice;
-    });
+      await recordAuditTrail({
+        userId: user.id,
+        tenantId: user.tenantId,
+        module: 'sales',
+        entity: 'SalesOrder',
+        entityId: salesOrder.id,
+        action: 'CONVERT',
+        after: { invoiceId: result.invoice.id, invoiceNumber },
+        ip: request.headers.get('x-forwarded-for') || undefined,
+        userAgent: request.headers.get('user-agent') || undefined,
+      });
 
-    // Trigger workflow transitions
-    await transitionEntity('SalesOrder', salesOrder.id, 'invoiced', user.id, { invoiceId: invoice.id, grandTotal });
-    await transitionEntity('SalesInvoice', invoice.id, 'pending', user.id, { salesOrderId: salesOrder.id, grandTotal });
+      await logAuditAction(
+        user.id,
+        'CREATE',
+        'sales',
+        'SalesInvoice',
+        result.invoice.id,
+        { fromSalesOrder: salesOrder.id, salesOrderNumber: salesOrder.orderNumber },
+        request.headers.get('x-forwarded-for') || undefined,
+        request.headers.get('user-agent') || undefined,
+      );
 
-    // Audit logging
-    await logAuditAction(
-      user.id, 'CONVERT', 'sales', 'SalesOrder', salesOrder.id,
-      { convertedTo: invoice.id, invoiceNumber: invoice.invoiceNumber },
-      request.headers.get('x-forwarded-for') || undefined,
-      request.headers.get('user-agent') || undefined
-    );
-
-    await logAuditAction(
-      user.id, 'CREATE', 'sales', 'SalesInvoice', invoice.id,
-      { fromSalesOrder: salesOrder.id, salesOrderNumber: salesOrder.orderNumber },
-      request.headers.get('x-forwarded-for') || undefined,
-      request.headers.get('user-agent') || undefined
-    );
-
-    return apiSuccess(invoice, 'Sales order converted to invoice successfully');
+      return apiSuccess(result.invoice, 'تم تحويل أمر البيع إلى فاتورة');
+    } catch (error) {
+      if (error instanceof InvoiceExecutionError) {
+        const mapped = mapExecutionError(error);
+        return apiError(mapped.body.error, mapped.status, mapped.body);
+      }
+      throw error;
+    }
   } catch (error) {
     return handleApiError(error, 'Convert sales order to invoice');
   }

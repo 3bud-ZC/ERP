@@ -6,6 +6,7 @@
 
 import { prisma } from './db';
 import { formatDate } from './format';
+import { CODE_ENTITY_KEYS, nextEntityCode } from './code-sequence.service';
 
 /** In-process cache: tracks which tenants have had accounts seeded this session */
 const seededTenants = new Set<string>();
@@ -97,14 +98,13 @@ export async function seedChartOfAccounts(tenantId: string = 'default') {
 }
 
 /**
- * Generate a unique journal entry number
+ * Generate a unique journal entry number (per-tenant, per-year sequence).
  */
-export async function generateEntryNumber(): Promise<string> {
-  const now = new Date();
-  const dateStr = now.toISOString().split('T')[0].replace(/-/g, '');
-  const timestamp = now.getTime();
-  const random = Math.floor(Math.random() * 1000);
-  return `JE-${dateStr}-${timestamp}-${random}`;
+export async function generateEntryNumber(tenantId: string): Promise<string> {
+  if (!tenantId) {
+    throw new Error('tenantId is required to generate journal entry number');
+  }
+  return nextEntityCode(CODE_ENTITY_KEYS.JOURNAL_ENTRY, tenantId);
 }
 
 /**
@@ -129,7 +129,11 @@ export async function createJournalEntry(entry: JournalEntryInput, createdBy?: s
     const tid = entry.tenantId || 'default';
     await ensureAccountsSeeded(tid);
 
-    const entryNumber = await generateEntryNumber();
+    const tenantId = entry.tenantId;
+    if (!tenantId) {
+      throw new Error('tenantId is required on journal entry');
+    }
+    const entryNumber = await generateEntryNumber(tenantId);
 
     // Create journal entry with lines in transaction
     const journalEntry = await prisma.journalEntry.create({

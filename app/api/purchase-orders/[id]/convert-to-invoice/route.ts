@@ -1,133 +1,97 @@
-import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
-import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
+import { getAuthenticatedUser, checkPermission, logAuditAction } from '@/lib/auth';
 import { reversePurchaseOrderJournalEntry } from '@/lib/accounting';
+import { resolveInvoiceNumber } from '@/lib/invoice-numbering';
+import {
+  executeCreatePurchaseInvoice,
+  InvoiceExecutionError,
+  mapExecutionError,
+} from '@/lib/services/invoice-execution.service';
+import { recordAuditTrail } from '@/lib/services/audit-trail.service';
 
-// Disable caching for real-time data
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// POST - Convert Purchase Order to Purchase Invoice
+/** POST — full PO → invoice via canonical execution. */
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!checkPermission(user, 'create_purchase_invoice')) return apiError('ليس لديك صلاحية', 403);
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر', 400);
 
     const { id } = params;
 
-    // Check if purchase order exists
-    const purchaseOrder = await (prisma as any).purchaseOrder.findUnique({
-      where: { id },
-      include: {
-        supplier: true,
-        items: {
-          include: {
-            product: true,
-          },
-        },
-      },
+    const purchaseOrder = await prisma.purchaseOrder.findFirst({
+      where: { id, tenantId: user.tenantId },
+      include: { supplier: true, items: { include: { product: true } } },
     });
 
-    if (!purchaseOrder) {
-      return apiError('Purchase order not found', 404);
-    }
+    if (!purchaseOrder) return apiError('Purchase order not found', 404);
 
-    // Generate invoice number
-    const lastInvoice = await (prisma as any).purchaseInvoice.findFirst({
-      orderBy: { invoiceNumber: 'desc' },
-    });
-    const nextNumber = lastInvoice ? parseInt(lastInvoice.invoiceNumber.slice(3)) + 1 : 1;
-    const invoiceNumber = `PI-${String(nextNumber).padStart(6, '0')}`;
+    const invoiceItems = purchaseOrder.items.map(item => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      price: item.price,
+      unitCost: item.price,
+    }));
 
-    // Calculate totals
-    let total = 0;
-    const invoiceItems = purchaseOrder.items.map((item: any) => {
-      const itemTotal = item.quantity * item.price;
-      total += itemTotal;
-      return {
-        productId: item.productId,
-        quantity: item.quantity,
-        price: item.price,
-        total: itemTotal,
-      };
-    });
+    const invoiceNumber = await resolveInvoiceNumber(null, 'PINV', user.tenantId);
 
-    const discount = 0;
-    const tax = (total - discount) * 0.15;
-    const grandTotal = total - discount + tax;
-
-    // Create invoice with transaction
-    const invoice = await prisma.$transaction(async (tx) => {
-      // Create purchase invoice
-      const newInvoice = await (tx as any).purchaseInvoice.create({
-        data: {
+    try {
+      const result = await executeCreatePurchaseInvoice({
+        invoiceData: {
           invoiceNumber,
-          supplierId: purchaseOrder.supplierId,
           date: new Date(),
-          status: 'pending',
-          paymentStatus: 'credit',
-          paidAmount: 0,
-          notes: purchaseOrder.notes,
-          total,
-          discount,
-          tax,
-          grandTotal,
-          purchaseOrderId: purchaseOrder.id,
-          items: {
-            create: invoiceItems,
-          },
+          supplierId: purchaseOrder.supplierId,
+          notes: purchaseOrder.notes ?? undefined,
+          status: 'posted',
+          paymentStatus: 'unpaid',
         },
-        include: {
-          supplier: true,
-          items: {
-            include: {
-              product: true,
-            },
-          },
-        },
+        items: invoiceItems,
+        tenantId: user.tenantId,
+        userId: user.id,
       });
 
-      // Increment stock for each item
-      for (const item of invoiceItems) {
-        await (tx as any).product.update({
-          where: { id: item.productId },
-          data: {
-            stock: {
-              increment: item.quantity,
-            },
-          },
-        });
-
-        // Create inventory transaction
-        await (tx as any).inventoryTransaction.create({
-          data: {
-            productId: item.productId,
-            type: 'purchase',
-            quantity: item.quantity,
-            referenceId: newInvoice.id,
-            date: new Date(),
-            notes: `Purchase Invoice ${invoiceNumber}`,
-          },
-        });
-      }
-
-      // Reverse purchase order journal entry if it exists
       await reversePurchaseOrderJournalEntry(purchaseOrder.id, user.id);
 
-      // Update purchase order status
-      await (tx as any).purchaseOrder.update({
+      await prisma.purchaseOrder.update({
         where: { id: purchaseOrder.id },
-        data: {
-          status: 'invoiced',
-        },
+        data: { status: 'invoiced' },
       });
 
-      return newInvoice;
-    });
+      await recordAuditTrail({
+        userId: user.id,
+        tenantId: user.tenantId,
+        module: 'purchases',
+        entity: 'PurchaseOrder',
+        entityId: purchaseOrder.id,
+        action: 'CONVERT',
+        after: { invoiceId: result.invoice.id, invoiceNumber },
+        ip: request.headers.get('x-forwarded-for') || undefined,
+        userAgent: request.headers.get('user-agent') || undefined,
+      });
 
-    return apiSuccess(invoice, 'Purchase order converted to invoice successfully');
+      await logAuditAction(
+        user.id,
+        'CREATE',
+        'purchases',
+        'PurchaseInvoice',
+        result.invoice.id,
+        { fromPurchaseOrder: purchaseOrder.id },
+        request.headers.get('x-forwarded-for') || undefined,
+        request.headers.get('user-agent') || undefined,
+      );
+
+      return apiSuccess(result.invoice, 'تم تحويل أمر الشراء إلى فاتورة');
+    } catch (error) {
+      if (error instanceof InvoiceExecutionError) {
+        const mapped = mapExecutionError(error);
+        return apiError(mapped.body.error, mapped.status, mapped.body);
+      }
+      throw error;
+    }
   } catch (error) {
     return handleApiError(error, 'Convert purchase order to invoice');
   }

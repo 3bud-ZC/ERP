@@ -1,22 +1,19 @@
 /**
- * Invoice number auto-generation.
- *
- * Generates a sequential per-tenant, per-year invoice number with a configurable
- * prefix. Format: `{PREFIX}-{YYYY}-{NNNNNN}` (zero-padded to 6 digits).
- *
- * If the caller provided a non-empty number, it is returned unchanged so users
- * who type their own invoice numbers manually still control the value.
+ * Invoice number auto-generation (delegates to unified code sequence).
  */
 
-import { prisma } from './db';
+import {
+  CODE_ENTITY_KEYS,
+  resolveEntityCode,
+} from './code-sequence.service';
 
-export type InvoicePrefix = 'INV' | 'PI';
+export type InvoicePrefix = 'INV' | 'PI' | 'PINV';
 
 /**
  * Resolve the invoice number to use.
  *
  * @param providedNumber  Whatever the client sent (may be undefined / empty).
- * @param prefix          'INV' for sales, 'PI' for purchase.
+ * @param prefix          'INV' for sales; 'PI' or 'PINV' for purchase (both → PINV sequence).
  * @param tenantId        Tenant scope (numbers are sequential per tenant).
  * @param year            Optional year (defaults to current).
  */
@@ -29,38 +26,10 @@ export async function resolveInvoiceNumber(
   const trimmed = (providedNumber ?? '').trim();
   if (trimmed.length > 0) return trimmed;
 
-  const yearStr = String(year);
-  const search = `${prefix}-${yearStr}-`;
+  const entityKey =
+    prefix === 'INV'
+      ? CODE_ENTITY_KEYS.SALES_INVOICE
+      : CODE_ENTITY_KEYS.PURCHASE_INVOICE;
 
-  // Find the highest existing number for this tenant + year + prefix.
-  const last = prefix === 'PI'
-    ? await prisma.purchaseInvoice.findFirst({
-        where: {
-          tenantId,
-          invoiceNumber: { startsWith: search },
-        },
-        orderBy: { invoiceNumber: 'desc' },
-        select: { invoiceNumber: true },
-      })
-    : await prisma.salesInvoice.findFirst({
-        where: {
-          tenantId,
-          invoiceNumber: { startsWith: search },
-        },
-        orderBy: { invoiceNumber: 'desc' },
-        select: { invoiceNumber: true },
-      });
-
-  let nextSeq = 1;
-  if (last?.invoiceNumber) {
-    const parts = last.invoiceNumber.split('-');
-    // Expect [PREFIX, YEAR, NNNNNN]; defensively handle malformed values.
-    const tail = parts[parts.length - 1];
-    const parsed = parseInt(tail, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      nextSeq = parsed + 1;
-    }
-  }
-
-  return `${prefix}-${yearStr}-${String(nextSeq).padStart(6, '0')}`;
+  return resolveEntityCode(null, entityKey, tenantId, undefined, year);
 }

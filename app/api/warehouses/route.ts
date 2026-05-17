@@ -6,6 +6,7 @@ export const revalidate = 0;
 
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
+import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service';
 
 export async function GET(request: Request) {
   try {
@@ -57,9 +58,6 @@ export async function POST(request: Request) {
     const phone = body.phone?.toString().trim() || null;
     const manager = body.manager?.toString().trim() || null;
 
-    if (!code) {
-      return handleApiError(new Error('الكود مطلوب'), 'Create warehouse');
-    }
     if (!nameAr) {
       return handleApiError(new Error('الاسم العربي مطلوب'), 'Create warehouse');
     }
@@ -68,8 +66,20 @@ export async function POST(request: Request) {
       return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
+    const resolvedCode = await resolveEntityCode(
+      code,
+      CODE_ENTITY_KEYS.WAREHOUSE,
+      user.tenantId,
+    );
+
     const warehouse = await warehouseRepo.create({
-      code, nameAr, nameEn, address, phone, manager, tenantId: user.tenantId,
+      code: resolvedCode,
+      nameAr,
+      nameEn,
+      address,
+      phone,
+      manager,
+      tenantId: user.tenantId,
     });
 
     await logAuditAction(

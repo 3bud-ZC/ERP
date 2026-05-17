@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser, checkPermission, logAuditAction } from '@/lib/auth';
 import { transitionEntity } from '@/lib/workflow-engine';
+import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service';
 import { registerAllEventHandlers } from '@/lib/event-handlers';
 
 // Register event handlers on module load
@@ -94,12 +95,15 @@ export async function POST(request: Request) {
       return apiError('Goods receipt already exists for this purchase order', 400);
     }
 
-    // Generate receipt number
-    const lastReceipt = await (prisma as any).goodsReceipt.findFirst({
-      orderBy: { receiptNumber: 'desc' },
-    });
-    const nextNumber = lastReceipt ? parseInt(lastReceipt.receiptNumber.slice(3)) + 1 : 1;
-    const receiptNumber = `GR-${String(nextNumber).padStart(6, '0')}`;
+    if (!user.tenantId) {
+      return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
+    }
+
+    const receiptNumber = await resolveEntityCode(
+      body.receiptNumber,
+      CODE_ENTITY_KEYS.GOODS_RECEIPT,
+      user.tenantId,
+    );
 
     // Validate items and calculate variances
     const validatedItems = [];

@@ -58,8 +58,10 @@ model Tenant {
   suppliers             Supplier[]
   users                 UserTenantRole[]
   warehouses            Warehouse[]
+  warehouseStocks       WarehouseStock[]
   stockReservations     StockReservation[]
   workInProgress        WorkInProgress[]
+  codeSequences         CodeSequence[]
   paymentAllocations    PaymentAllocation[]
   auditLogs             AuditLog[]
   accountingPeriods     AccountingPeriod[]
@@ -123,9 +125,29 @@ model Warehouse {
   transfersFrom StockTransfer[] @relation("FromWarehouse")
   transfersTo   StockTransfer[] @relation("ToWarehouse")
   stocktakes    Stocktake[]
+  warehouseStocks WarehouseStock[]
   tenant        Tenant          @relation(fields: [tenantId], references: [id])
 
   @@index([tenantId])
+}
+
+model WarehouseStock {
+  id          String    @id @default(cuid())
+  tenantId    String
+  productId   String
+  warehouseId String
+  quantity    Float     @default(0)
+  reservedQty Float     @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, productId, warehouseId])
+  @@index([tenantId])
+  @@index([productId])
+  @@index([warehouseId])
 }
 
 model Company {
@@ -246,6 +268,7 @@ model Product {
   stockReservations        StockReservation[]
   stockTransfers           StockTransfer[]
   stocktakeItems           StocktakeItem[]
+  warehouseStocks          WarehouseStock[]
 
   @@index([type])
   @@index([code])
@@ -1590,4 +1613,20 @@ model SystemSettings {
   initLockId    String?
   productionMode Boolean  @default(false)
   lastUpdated   DateTime  @default(now()) @updatedAt
+}
+
+/// Per-tenant, per-year atomic document/entity code sequences (Phase 2A).
+model CodeSequence {
+  id         String   @id @default(cuid())
+  tenantId   String
+  entityKey  String
+  year       Int
+  lastValue  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, entityKey, year])
+  @@index([tenantId])
+  @@index([entityKey])
 }

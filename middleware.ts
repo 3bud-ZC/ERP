@@ -14,6 +14,9 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
+/** Paths reachable during safe mode (config recovery / diagnostics only). */
+const SAFE_MODE_ALLOWED_PREFIXES = ['/api/health', '/api/init', '/api/system/status'];
+
 // ============================================================================
 // SAFE MODE DETECTION (CRITICAL)
 // ============================================================================
@@ -106,6 +109,17 @@ setInterval(() => {
 // SECURITY HEADERS
 // ============================================================================
 
+const CONTENT_SECURITY_POLICY =
+  "default-src 'self'; " +
+  "script-src 'self' 'unsafe-inline'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; " +
+  "font-src 'self' data:; " +
+  "connect-src 'self' https: ws:; " +
+  "frame-ancestors 'none'; " +
+  "base-uri 'self'; " +
+  "form-action 'self';";
+
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
@@ -115,7 +129,7 @@ const SECURITY_HEADERS = {
 };
 
 if (process.env.NODE_ENV === 'production') {
-  (SECURITY_HEADERS as Record<string, string>)['Strict-Transport-Security'] = 
+  (SECURITY_HEADERS as Record<string, string>)['Strict-Transport-Security'] =
     'max-age=31536000; includeSubDomains; preload';
 }
 
@@ -158,13 +172,25 @@ export function middleware(request: NextRequest) {
   Object.entries(SECURITY_HEADERS).forEach(([key, value]) => {
     response.headers.set(key, value);
   });
+  if (process.env.NODE_ENV === 'production') {
+    response.headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+    response.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+    response.headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), interest-cohort=()');
+    response.headers.set('Access-Control-Allow-Origin', process.env.NEXTAUTH_URL || 'https://your-domain.com');
+    response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Forwarded-For');
+    response.headers.set('Access-Control-Allow-Credentials', 'true');
+  }
   response.headers.set('X-Request-ID', requestId);
   
   // ==========================================================================
   // 1. SAFE MODE CHECK (HIGHEST PRIORITY)
   // ==========================================================================
   
-  if (isSafeModeActive() && !pathname.startsWith('/api/health')) {
+  if (
+    isSafeModeActive() &&
+    !SAFE_MODE_ALLOWED_PREFIXES.some((p) => pathname.startsWith(p))
+  ) {
     console.error(`[${requestId}] BLOCKED: Safe mode active (${safeModeReason})`);
     return NextResponse.json(
       {
@@ -210,25 +236,12 @@ export function middleware(request: NextRequest) {
   }
   
   // ==========================================================================
-  // 3. PRODUCTION INIT DISABLEMENT
+  // 3. PUBLIC ROUTES (skip auth check)
   // ==========================================================================
-  
-  if (process.env.NODE_ENV === 'production' && pathname.startsWith('/api/init')) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: {
-          code: 'ENDPOINT_DEPRECATED',
-          message: '/api/init is disabled in production.',
-        },
-      },
-      { status: 410 }
-    );
-  }
-  
-  // ==========================================================================
-  // 4. PUBLIC ROUTES (skip auth check)
-  // ==========================================================================
+  // NOTE: /api/init is NOT blocked here in production. The route handler enforces
+  // SETUP_TOKEN (POST), isSeedingAllowed(), and init locks. Blocking unconditionally
+  // at middleware caused a deadlock: UNINITIALIZED systems could not bootstrap and
+  // /api/auth/login correctly returns 503 until initialization completes.
   
   const publicRoutes = [
     '/login',
@@ -240,6 +253,7 @@ export function middleware(request: NextRequest) {
     '/setup',
     '/api/init',
     '/api/health',
+    '/api/system/status',
   ];
   
   if (publicRoutes.some((route: string) => pathname.startsWith(route))) {
@@ -247,7 +261,7 @@ export function middleware(request: NextRequest) {
   }
   
   // ==========================================================================
-  // 5. JWT VALIDATION
+  // 4. JWT VALIDATION (structural check — full signature verify in API routes)
   // ==========================================================================
   
   const token = request.cookies.get('token')?.value;

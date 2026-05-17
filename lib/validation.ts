@@ -94,14 +94,15 @@ export async function validatePaymentAmount(invoiceId: string, invoiceType: 'sal
   } else {
     const invoice = await prisma.purchaseInvoice.findUnique({
       where: { id: invoiceId },
-      select: { total: true, paidAmount: true, invoiceNumber: true }
+      select: { total: true, grandTotal: true, paidAmount: true, invoiceNumber: true }
     });
 
     if (!invoice) {
       return { valid: false, error: 'Purchase invoice not found' };
     }
 
-    const remaining = invoice.total - invoice.paidAmount;
+    const due = invoice.grandTotal || invoice.total;
+    const remaining = due - invoice.paidAmount;
     if (paymentAmount > remaining + 0.01) {
       return {
         valid: false,

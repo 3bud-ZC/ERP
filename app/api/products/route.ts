@@ -6,6 +6,7 @@ export const revalidate = 0;
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { validateProductType } from '@/lib/validation';
+import { productCodeEntityKey, resolveEntityCode } from '@/lib/code-sequence.service';
 import { logActivity } from '@/lib/activity-log';
 
 // GET - Read products (finished products only)
@@ -45,9 +46,6 @@ export async function POST(request: Request) {
 
     // Validate required fields and field types
     const { code, nameAr, nameEn, type, unitId, price, cost, stock, minStock, warehouseId, itemGroupId, companyId } = body;
-    if (!code || typeof code !== 'string' || !code.trim()) {
-      return apiError('كود المنتج مطلوب', 400);
-    }
     if (!nameAr || typeof nameAr !== 'string' || !nameAr.trim()) {
       return apiError('اسم المنتج بالعربية مطلوب', 400);
     }
@@ -72,14 +70,24 @@ export async function POST(request: Request) {
       return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
+    const productType =
+      type && typeof type === 'string' && validateProductType(type)
+        ? String(type)
+        : 'finished_product';
+    const resolvedCode = await resolveEntityCode(
+      typeof code === 'string' ? code : '',
+      productCodeEntityKey(productType),
+      user.tenantId,
+    );
+
     // Whitelist allowed fields — prevent injection of unexpected Prisma fields
     const productData: any = {
-      code: code.trim(),
+      code: resolvedCode,
       nameAr: nameAr.trim(),
       unit: body.unit?.toString()?.trim() || 'piece', // Required field with default
       tenantId: user.tenantId, // Direct tenantId assignment
       ...(nameEn && { nameEn: String(nameEn).trim() }),
-      ...(type && { type: String(type) }),
+      type: productType,
       ...(price !== undefined && { price: Number(price) }),
       ...(cost !== undefined && { cost: Number(cost) }),
       ...(stock !== undefined && { stock: Number(stock) }),
@@ -91,6 +99,20 @@ export async function POST(request: Request) {
     };
 
     const product = await productRepo.create(productData);
+
+    const openingStock = Number(stock) || 0;
+    const openingCost = Number(cost) ?? 0;
+    if (openingStock > 0 && user.tenantId) {
+      const { recordStockInflow } = await import('@/lib/inventory-costing');
+      await recordStockInflow(
+        product.id,
+        openingStock,
+        openingCost,
+        user.tenantId,
+        'OpeningBalance',
+        product.id,
+      );
+    }
 
     // Log audit action
     await logAuditAction(

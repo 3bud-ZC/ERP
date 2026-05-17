@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutGrid, Package, Warehouse, ClipboardList } from 'lucide-react';
+import { LayoutGrid, Package, Warehouse, ClipboardList, Boxes, ShoppingBag } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -14,10 +14,11 @@ import { cn } from '@/lib/utils';
  * just points there directly.
  */
 const INVENTORY_TABS = [
-  { href: '/inventory',                    title: 'نظرة عامة',  icon: LayoutGrid },
-  { href: '/inventory/products',           title: 'المنتجات',    icon: Package },
-  { href: '/warehouses',                   title: 'المستودعات',  icon: Warehouse },
-  { href: '/inventory/stock-adjustments',  title: 'تسوية المخزون', icon: ClipboardList },
+  { href: '/inventory',                       title: 'نظرة عامة',     icon: LayoutGrid },
+  { href: '/inventory/raw-materials',         title: 'مواد خام',      icon: Boxes },
+  { href: '/inventory/finished-products',       title: 'منتجات نهائية', icon: ShoppingBag },
+  { href: '/warehouses',                      title: 'المستودعات',    icon: Warehouse },
+  { href: '/inventory/stock-adjustments',       title: 'تسوية المخزون', icon: ClipboardList },
 ] as const;
 
 export function InventoryLayout({
