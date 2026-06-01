@@ -7,12 +7,14 @@ Wants=network-online.target
 Type=simple
 User=erp
 Group=erp
-WorkingDirectory=/var/www/erp
+WorkingDirectory=/var/www/erp/.next/standalone
 EnvironmentFile=/var/www/erp/.env
 Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=0.0.0.0
 Environment=PATH=/usr/bin:/usr/local/bin
 Environment=HOME=/var/www/erp
-ExecStart=/usr/bin/env npm run start:prod
+ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20

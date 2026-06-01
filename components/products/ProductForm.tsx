@@ -2,12 +2,14 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Package, AlertTriangle } from 'lucide-react';
 import { useToast, Toast } from '@/components/ui/patterns';
 import { Field, SelectField, Section, FieldGrid } from '@/components/ui/modal';
 import { EntityFormPage } from '@/components/forms/EntityFormPage';
-import { apiGet } from '@/lib/api/fetcher';
+import { AutoCodeField } from '@/components/forms/AutoCodeField';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
+import { queryKeys } from '@/lib/api/query-keys';
 
 export interface ProductExisting {
   id:           string;
@@ -31,17 +33,22 @@ interface WarehouseLite {
 }
 
 const empty = {
-  code:        '',
   nameAr:      '',
   nameEn:      '',
   type:        'finished_product',
-  unit:        'قطعة',
+  unit:        '',
   price:       '',
   cost:        '',
   stock:       '0',
   minStock:    '',
   warehouseId: '',
 };
+
+const UNIT_OPTIONS = [
+  'قطعة', 'كرتونة', 'علبة', 'كيلو جرام', 'جرام', 'طن', 'لتر', 'ملليلتر',
+  'متر', 'سنتيمتر', 'متر مربع', 'متر مكعب', 'عبوة', 'دستة', 'باكت',
+  'رول', 'كيس', 'زجاجة', 'وحدة'
+];
 
 export function ProductForm({
   mode,
@@ -56,6 +63,7 @@ export function ProductForm({
   backHref?:   string;
   listHref?:   string;
 }) {
+  const qc = useQueryClient();
   const router = useRouter();
   const [toast, showToast] = useToast();
 
@@ -64,7 +72,6 @@ export function ProductForm({
   const [form, setForm] = useState(() =>
     existing
       ? {
-          code:        existing.code,
           nameAr:      existing.nameAr,
           nameEn:      existing.nameEn ?? '',
           type:        lockedType ?? existing.type ?? 'finished_product',
@@ -81,7 +88,7 @@ export function ProductForm({
   // Pull active warehouses for the picker. Same shape returned across the app.
   const warehousesQ = useQuery({
     queryKey: ['warehouses'],
-    queryFn:  () => apiGet<WarehouseLite[]>('/api/warehouses'),
+    queryFn:  () => apiGetList<WarehouseLite>('/api/warehouses'),
     staleTime: 60_000,
   });
   const warehouses = (warehousesQ.data ?? []).filter(w => w.isActive !== false);
@@ -92,7 +99,6 @@ export function ProductForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!form.code.trim())   return setError('الرمز مطلوب');
     if (!form.nameAr.trim()) return setError('الاسم بالعربية مطلوب');
     if (!form.price)         return setError('سعر البيع مطلوب');
 
@@ -101,7 +107,6 @@ export function ProductForm({
       const payload =
         mode === 'create'
           ? {
-              code:   form.code.trim(),
               nameAr: form.nameAr.trim(),
               ...(form.nameEn && { nameEn: form.nameEn.trim() }),
               type:   lockedType ?? form.type,
@@ -114,7 +119,6 @@ export function ProductForm({
             }
           : {
               id:          existing!.id,
-              code:        form.code.trim(),
               nameAr:      form.nameAr.trim(),
               nameEn:      form.nameEn.trim() || null,
               type:        form.type,
@@ -134,6 +138,8 @@ export function ProductForm({
       const j = await res.json();
 
       if (j.success) {
+        // Ensure lists reflect immediately after navigation (all product lists).
+        qc.invalidateQueries({ queryKey: ['products'], exact: false });
         showToast(mode === 'create' ? 'تم إضافة المنتج بنجاح' : 'تم تحديث بيانات المنتج', 'success');
         setTimeout(() => router.push(listHref), 600);
       } else {
@@ -171,10 +177,13 @@ export function ProductForm({
             </div>
           )}
 
-          <Section title="البيانات الأساسية" subtitle="الرمز والاسم والنوع">
+          <Section title="البيانات الأساسية" subtitle="الاسم والنوع">
             <FieldGrid>
-              <Field label="الرمز" required value={form.code} placeholder="PRD-001"
-                onChange={e => setForm(f => ({ ...f, code: e.target.value }))} />
+              <AutoCodeField
+                mode={mode}
+                value={existing?.code}
+                label={lockedType === 'raw_material' ? 'رمز المادة الخام' : 'رمز المنتج'}
+              />
               {lockedType ? (
                 <Field
                   label="النوع"
@@ -205,8 +214,16 @@ export function ProductForm({
                 onChange={e => setForm(f => ({ ...f, price: e.target.value }))} />
               <Field label="التكلفة (ج.م)" type="number" min="0" step="0.01" value={form.cost} placeholder="0"
                 onChange={e => setForm(f => ({ ...f, cost: e.target.value }))} />
-              <Field label="وحدة القياس" value={form.unit} placeholder="قطعة"
-                onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} />
+              <SelectField label="وحدة القياس" value={form.unit}
+                onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}>
+                <option value="" disabled>اختر وحدة القياس</option>
+                {form.unit && !UNIT_OPTIONS.includes(form.unit) && (
+                  <option value={form.unit}>{form.unit}</option>
+                )}
+                {UNIT_OPTIONS.map(u => (
+                  <option key={u} value={u}>{u}</option>
+                ))}
+              </SelectField>
             </FieldGrid>
           </Section>
 

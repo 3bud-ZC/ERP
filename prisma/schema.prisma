@@ -28,6 +28,8 @@ model Tenant {
   accruals              Accrual[]
   batches               Batch[]
   budgets               Budget[]
+  cashboxes             Cashbox[]
+  cashboxTransactions   CashboxTransaction[]
   companies             Company[]
   customers             Customer[]
   expenses              Expense[]
@@ -110,23 +112,23 @@ model ItemGroup {
 }
 
 model Warehouse {
-  id            String          @id @default(cuid())
-  code          String          @unique
-  nameAr        String          @unique
-  nameEn        String?
-  address       String?
-  phone         String?
-  manager       String?
-  isActive      Boolean         @default(true)
-  tenantId      String
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  products      Product[]
-  transfersFrom StockTransfer[] @relation("FromWarehouse")
-  transfersTo   StockTransfer[] @relation("ToWarehouse")
-  stocktakes    Stocktake[]
+  id              String           @id @default(cuid())
+  code            String           @unique
+  nameAr          String           @unique
+  nameEn          String?
+  address         String?
+  phone           String?
+  manager         String?
+  isActive        Boolean          @default(true)
+  tenantId        String
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  products        Product[]
+  transfersFrom   StockTransfer[]  @relation("FromWarehouse")
+  transfersTo     StockTransfer[]  @relation("ToWarehouse")
+  stocktakes      Stocktake[]
   warehouseStocks WarehouseStock[]
-  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
 
   @@index([tenantId])
 }
@@ -318,6 +320,8 @@ model PurchaseOrder {
   id            String               @id @default(cuid())
   orderNumber   String               @unique
   supplierId    String
+  /// Optional treasury commitment cashbox (does not deduct balance, but tracks expected outflow).
+  cashboxId     String?
   date          DateTime
   status        String               @default("pending")
   notes         String?
@@ -329,10 +333,13 @@ model PurchaseOrder {
   goodsReceipts GoodsReceipt?
   requisition   PurchaseRequisition? @relation("RequisitionToOrder", fields: [requisitionId], references: [id])
   supplier      Supplier             @relation(fields: [supplierId], references: [id])
+  cashbox       Cashbox?             @relation(fields: [cashboxId], references: [id])
   tenant        Tenant               @relation(fields: [tenantId], references: [id])
   items         PurchaseOrderItem[]
 
   @@index([tenantId])
+  @@index([cashboxId])
+  @@index([tenantId, cashboxId, status])
 }
 
 model GoodsReceipt {
@@ -686,11 +693,14 @@ model Expense {
   status        String   @default("pending")
   costCenter    String?
   accountNumber String?
+  cashboxId     String?
   tenantId      String
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  cashbox       Cashbox? @relation(fields: [cashboxId], references: [id])
   tenant        Tenant   @relation(fields: [tenantId], references: [id])
 
+  @@index([cashboxId])
   @@index([tenantId])
 }
 
@@ -952,6 +962,7 @@ model Payment {
   supplierId        String?
   salesInvoiceId    String?
   purchaseInvoiceId String?
+  cashboxId         String?
   journalEntryId    String?
   reconciled        Boolean             @default(false)
   reconciledAt      DateTime?
@@ -960,6 +971,7 @@ model Payment {
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
   customer          Customer?           @relation(fields: [customerId], references: [id])
+  cashbox           Cashbox?            @relation(fields: [cashboxId], references: [id])
   journalEntry      JournalEntry?       @relation("PaymentJournalEntry", fields: [journalEntryId], references: [id])
   purchaseInvoice   PurchaseInvoice?    @relation(fields: [purchaseInvoiceId], references: [id])
   salesInvoice      SalesInvoice?       @relation(fields: [salesInvoiceId], references: [id])
@@ -969,10 +981,60 @@ model Payment {
 
   @@index([customerId])
   @@index([supplierId])
+  @@index([cashboxId])
   @@index([date])
   @@index([journalEntryId])
   @@index([reconciled])
   @@index([tenantId])
+}
+
+model Cashbox {
+  id             String               @id @default(cuid())
+  code           String               @unique
+  name           String
+  currency       String               @default("EGP")
+  openingBalance Float                @default(0)
+  currentBalance Float                @default(0)
+  status         String               @default("active")
+  notes          String?
+  tenantId       String
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  tenant         Tenant               @relation(fields: [tenantId], references: [id])
+  transactions   CashboxTransaction[]
+  payments       Payment[]
+  expenses       Expense[]
+  purchaseOrders PurchaseOrder[]
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+model CashboxTransaction {
+  id            String   @id @default(cuid())
+  cashboxId     String
+  type          String
+  direction     String
+  amount        Float
+  beforeBalance Float    @default(0)
+  afterBalance  Float    @default(0)
+  date          DateTime @default(now())
+  referenceType String?
+  referenceId   String?
+  description   String?
+  tenantId      String
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  cashbox       Cashbox  @relation(fields: [cashboxId], references: [id], onDelete: Cascade)
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([cashboxId])
+  @@index([date])
+  @@index([tenantId, date])
+  @@index([tenantId, cashboxId, date])
+  @@index([referenceType, referenceId])
 }
 
 model ProductionWaste {
@@ -1015,34 +1077,34 @@ model JournalEntryLine {
 }
 
 model JournalEntry {
-  id              String             @id @default(cuid())
-  entryNumber     String             @unique
-  entryDate       DateTime
-  description     String?
-  referenceType   String?
-  referenceId     String?
-  totalDebit      Decimal            @default(0)
-  totalCredit     Decimal            @default(0)
-  isPosted        Boolean            @default(false)
-  postedDate      DateTime?
-  createdBy       String?
-  tenantId        String
-  fiscalYearId    String?
-  fiscalYear      FiscalYear?        @relation(fields: [fiscalYearId], references: [id])
+  id                 String             @id @default(cuid())
+  entryNumber        String             @unique
+  entryDate          DateTime
+  description        String?
+  referenceType      String?
+  referenceId        String?
+  totalDebit         Decimal            @default(0)
+  totalCredit        Decimal            @default(0)
+  isPosted           Boolean            @default(false)
+  postedDate         DateTime?
+  createdBy          String?
+  tenantId           String
+  fiscalYearId       String?
+  fiscalYear         FiscalYear?        @relation(fields: [fiscalYearId], references: [id])
   accountingPeriodId String?
-  accountingPeriod AccountingPeriod? @relation(fields: [accountingPeriodId], references: [id])
-  reversalEntryId String?           @unique
-  reversalEntry   JournalEntry?      @relation("EntryReversal", fields: [reversalEntryId], references: [id])
-  reversedBy      JournalEntry?      @relation("EntryReversal")
-  sourceEventId   String?
-  correlationId   String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  accrual         Accrual?
-  tenant          Tenant             @relation(fields: [tenantId], references: [id])
-  lines           JournalEntryLine[]
-  payments        Payment[]          @relation("PaymentJournalEntry")
-  stockAdjustment StockAdjustment?
+  accountingPeriod   AccountingPeriod?  @relation(fields: [accountingPeriodId], references: [id])
+  reversalEntryId    String?            @unique
+  reversalEntry      JournalEntry?      @relation("EntryReversal", fields: [reversalEntryId], references: [id])
+  reversedBy         JournalEntry?      @relation("EntryReversal")
+  sourceEventId      String?
+  correlationId      String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  accrual            Accrual?
+  tenant             Tenant             @relation(fields: [tenantId], references: [id])
+  lines              JournalEntryLine[]
+  payments           Payment[]          @relation("PaymentJournalEntry")
+  stockAdjustment    StockAdjustment?
 
   @@index([entryDate])
   @@index([isPosted])
@@ -1070,7 +1132,7 @@ model Account {
   balanceHistory AccountBalanceHistory[]
   budgetEntries  BudgetEntry[]
   journalLines   JournalEntryLine[]
-  tenant         Tenant                   @relation(fields: [tenantId], references: [id])
+  tenant         Tenant                  @relation(fields: [tenantId], references: [id])
 
   @@unique([tenantId, code])
   @@index([tenantId])
@@ -1122,21 +1184,21 @@ model RecurringJournalEntry {
 }
 
 model AccountingPeriod {
-  id               String          @id @default(cuid())
-  name             String
-  startDate        DateTime
-  endDate          DateTime
-  status           String          @default("open")
-  fiscalYearId     String
-  fiscalYear       FiscalYear      @relation(fields: [fiscalYearId], references: [id])
-  isClosed         Boolean         @default(false)
-  closedAt         DateTime?
-  closedBy         String?
-  tenantId         String
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
-  tenant           Tenant          @relation(fields: [tenantId], references: [id])
-  journalEntries   JournalEntry[]
+  id             String         @id @default(cuid())
+  name           String
+  startDate      DateTime
+  endDate        DateTime
+  status         String         @default("open")
+  fiscalYearId   String
+  fiscalYear     FiscalYear     @relation(fields: [fiscalYearId], references: [id])
+  isClosed       Boolean        @default(false)
+  closedAt       DateTime?
+  closedBy       String?
+  tenantId       String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+  journalEntries JournalEntry[]
 
   @@unique([tenantId, fiscalYearId, name])
   @@index([tenantId, fiscalYearId])
@@ -1281,21 +1343,21 @@ model BudgetEntry {
 }
 
 model User {
-  id                       String            @id @default(cuid())
-  email                    String            @unique
-  name                     String?
-  password                 String
-  isActive                 Boolean           @default(true)
-  lastLogin                DateTime?
-  createdAt                DateTime          @default(now())
-  updatedAt                DateTime          @updatedAt
-  auditLogs                AuditLog[]
-  sessions                 Session[]
-  roles                    UserRole[]
-  userTenantRoles          UserTenantRole[]
+  id                    String            @id @default(cuid())
+  email                 String            @unique
+  name                  String?
+  password              String
+  isActive              Boolean           @default(true)
+  lastLogin             DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  auditLogs             AuditLog[]
+  sessions              Session[]
+  roles                 UserRole[]
+  userTenantRoles       UserTenantRole[]
   // Back-relations from invoice salesRep / purchaseRep fields
-  salesInvoicesAsRep       SalesInvoice[]    @relation("SalesRepInvoices")
-  purchaseInvoicesAsRep    PurchaseInvoice[] @relation("PurchaseRepInvoices")
+  salesInvoicesAsRep    SalesInvoice[]    @relation("SalesRepInvoices")
+  purchaseInvoicesAsRep PurchaseInvoice[] @relation("PurchaseRepInvoices")
 }
 
 model Role {
@@ -1390,7 +1452,7 @@ model AuditLog {
   createdAt    DateTime @default(now())
   tenantId     String?
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenant       Tenant?   @relation(fields: [tenantId], references: [id])
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id])
 
   @@index([userId])
   @@index([action])
@@ -1550,7 +1612,7 @@ model PaymentAllocation {
   allocatedBy String?
   tenantId    String
   payment     Payment  @relation(fields: [paymentId], references: [id])
-  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
 
   @@index([paymentId])
   @@index([invoiceId])
@@ -1559,7 +1621,7 @@ model PaymentAllocation {
 }
 
 model OutboxEvent {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   eventType     String
   tenantId      String
   aggregateId   String
@@ -1567,16 +1629,16 @@ model OutboxEvent {
   version       Int
   data          Json
   metadata      Json
-  status        String   @default("pending")
+  status        String    @default("pending")
   occurredAt    DateTime
   processedAt   DateTime?
-  retryCount    Int      @default(0)
+  retryCount    Int       @default(0)
   lastError     String?
   errorMessage  String?
   correlationId String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
 
   @@index([tenantId, status])
   @@index([eventType, status])
@@ -1589,16 +1651,16 @@ model OutboxEvent {
 // Prevents duplicate API operations
 // Keys expire after 24 hours
 model IdempotencyKey {
-  id               String   @id @default(cuid())
-  key              String
-  tenantId         String
-  userId           String
-  requestPath      String
-  requestMethod    String
-  responseStatus   Int
-  responseBody     String   @db.Text
-  createdAt        DateTime @default(now())
-  expiresAt        DateTime
+  id             String   @id @default(cuid())
+  key            String
+  tenantId       String
+  userId         String
+  requestPath    String
+  requestMethod  String
+  responseStatus Int
+  responseBody   String   @db.Text
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
 
   @@unique([key, tenantId])
   @@index([expiresAt])
@@ -1606,25 +1668,25 @@ model IdempotencyKey {
 }
 
 model SystemSettings {
-  id            String    @id @default(cuid())
-  initialized   Boolean   @default(false)
-  locked        Boolean   @default(false)
-  initLock      DateTime?
-  initLockId    String?
-  productionMode Boolean  @default(false)
-  lastUpdated   DateTime  @default(now()) @updatedAt
+  id             String    @id @default(cuid())
+  initialized    Boolean   @default(false)
+  locked         Boolean   @default(false)
+  initLock       DateTime?
+  initLockId     String?
+  productionMode Boolean   @default(false)
+  lastUpdated    DateTime  @default(now()) @updatedAt
 }
 
 /// Per-tenant, per-year atomic document/entity code sequences (Phase 2A).
 model CodeSequence {
-  id         String   @id @default(cuid())
-  tenantId   String
-  entityKey  String
-  year       Int
-  lastValue  Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  tenantId  String
+  entityKey String
+  year      Int
+  lastValue Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, entityKey, year])
   @@index([tenantId])

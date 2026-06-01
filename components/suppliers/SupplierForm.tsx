@@ -2,10 +2,13 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Truck } from 'lucide-react';
 import { useToast, Toast } from '@/components/ui/patterns';
 import { Field, Section, FieldGrid } from '@/components/ui/modal';
 import { EntityFormPage } from '@/components/forms/EntityFormPage';
+import { AutoCodeField } from '@/components/forms/AutoCodeField';
+import { queryKeys } from '@/lib/api/query-keys';
 
 export interface SupplierExisting {
   id:           string;
@@ -17,7 +20,7 @@ export interface SupplierExisting {
   creditLimit?: number | null;
 }
 
-const empty = { code: '', nameAr: '', nameEn: '', email: '', phone: '', creditLimit: '' };
+const empty = { nameAr: '', nameEn: '', email: '', phone: '', creditLimit: '' };
 
 export function SupplierForm({
   mode,
@@ -26,13 +29,13 @@ export function SupplierForm({
   mode:      'create' | 'edit';
   existing?: SupplierExisting;
 }) {
+  const qc = useQueryClient();
   const router = useRouter();
   const [toast, showToast] = useToast();
 
   const [form, setForm] = useState(() =>
     existing
       ? {
-          code:        existing.code,
           nameAr:      existing.nameAr,
           nameEn:      existing.nameEn ?? '',
           email:       existing.email ?? '',
@@ -48,7 +51,6 @@ export function SupplierForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!form.code.trim())   return setError('الرمز مطلوب');
     if (!form.nameAr.trim()) return setError('الاسم بالعربية مطلوب');
 
     setSaving(true);
@@ -56,7 +58,6 @@ export function SupplierForm({
       const payload =
         mode === 'create'
           ? {
-              code:   form.code.trim(),
               nameAr: form.nameAr.trim(),
               ...(form.nameEn      && { nameEn:      form.nameEn.trim() }),
               ...(form.email       && { email:       form.email.trim() }),
@@ -65,7 +66,6 @@ export function SupplierForm({
             }
           : {
               id:          existing!.id,
-              code:        form.code.trim(),
               nameAr:      form.nameAr.trim(),
               nameEn:      form.nameEn.trim() || null,
               email:       form.email.trim()  || null,
@@ -82,6 +82,7 @@ export function SupplierForm({
       const j = await res.json();
 
       if (j.success) {
+        qc.invalidateQueries({ queryKey: queryKeys.suppliers });
         showToast(mode === 'create' ? 'تم إضافة المورد بنجاح' : 'تم تحديث بيانات المورد', 'success');
         setTimeout(() => router.push('/suppliers'), 600);
       } else {
@@ -112,10 +113,9 @@ export function SupplierForm({
         primaryLabel={mode === 'create' ? 'حفظ المورد' : 'حفظ التعديلات'}
       >
         <form id="supplier-form" onSubmit={handleSubmit} className="space-y-5">
-          <Section title="البيانات الأساسية" subtitle="الرمز والاسم وحد الائتمان">
+          <Section title="البيانات الأساسية" subtitle="الاسم وحد الائتمان">
             <FieldGrid>
-              <Field label="الرمز" required value={form.code} placeholder="SUP-001"
-                onChange={e => setForm(f => ({ ...f, code: e.target.value }))} />
+              <AutoCodeField mode={mode} value={existing?.code} />
               <Field label="حد الائتمان (ج.م)" type="number" min="0" value={form.creditLimit} placeholder="0"
                 onChange={e => setForm(f => ({ ...f, creditLimit: e.target.value }))} />
               <Field label="الاسم بالعربية" required value={form.nameAr} placeholder="شركة التوريد"

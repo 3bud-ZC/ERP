@@ -80,7 +80,7 @@ export function ExpenseForm({
 
       if (j.success) {
         showToast(mode === 'create' ? 'تم تسجيل المصروف' : 'تم تحديث المصروف', 'success');
-        setTimeout(() => router.push('/accounting/finance'), 600);
+        setTimeout(() => router.push('/accounting'), 600);
       } else {
         setError(j.message || j.error || 'فشل الحفظ');
         setSaving(false);
@@ -101,7 +101,7 @@ export function ExpenseForm({
             ? 'أدخل تفاصيل المصروف وطريقة الدفع'
             : existing?.description
         }
-        backHref="/accounting/finance"
+        backHref="/accounting"
         icon={<Receipt className="w-5 h-5" />}
         error={error}
         saving={saving}

@@ -57,7 +57,7 @@ interface RateLimitEntry {
 const rateLimitStore = new Map<string, RateLimitEntry>();
 
 const RATE_LIMITS = {
-  auth: { windowMs: 15 * 60 * 1000, maxRequests: 5 },      // 5 per 15 min
+  auth: { windowMs: 5 * 60 * 1000, maxRequests: 30 },      // 30 per 5 min
   init: { windowMs: 60 * 60 * 1000, maxRequests: 3 },      // 3 per hour
   general: { windowMs: 60 * 1000, maxRequests: 100 },      // 100 per min
 };
@@ -250,7 +250,6 @@ export function middleware(request: NextRequest) {
     '/api/auth/register',
     '/api/auth/logout',
     '/api/onboarding/init',
-    '/setup',
     '/api/init',
     '/api/health',
     '/api/system/status',

@@ -51,7 +51,8 @@ export async function POST(request: Request) {
       userAgent
     );
 
-    return apiSuccess({ user }, 'تم التسجيل بنجاح');
+    const { password: _pw, ...safeUser } = user as { password?: string; [k: string]: unknown };
+    return apiSuccess({ user: safeUser }, 'تم التسجيل بنجاح');
   } catch (error: any) {
     console.error('Registration error:', error);
     return apiError(error.message || 'فشل التسجيل', 400);

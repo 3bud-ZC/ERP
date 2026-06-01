@@ -3,11 +3,12 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/store/auth';
+import { ArrowLeft, LockKeyhole, Mail } from 'lucide-react';
+import { BRAND } from '@/lib/branding';
 
 export default function LoginPage() {
   const router = useRouter();
   const setUser = useAuthStore((s) => s.setUser);
-  const setToken = useAuthStore((s) => s.setToken);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -35,12 +36,11 @@ export default function LoginPage() {
       }
 
       // Sync user into Zustand store so dashboard layout sees isAuthenticated=true
-      const { id, email: userEmail, name, roles, permissions, hasTenant } = data.data;
+      const { id, email: userEmail, name, roles, permissions } = data.data;
       setUser({ id, email: userEmail, name, roles, permissions });
       useAuthStore.setState({ isAuthenticated: true });
 
-      // New users without a tenant go through onboarding first
-      router.replace(hasTenant ? '/dashboard' : '/onboarding');
+      router.replace('/dashboard');
     } catch (err: any) {
       const errorMessage = err?.message || err?.toString() || 'Unknown error';
       setError(errorMessage);
@@ -50,46 +50,57 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-50">
-      <div className="w-full max-w-md bg-white p-8 rounded-xl shadow-lg">
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-800">نظام ERP</h1>
-          <p className="text-gray-600 mt-2">تسجيل الدخول</p>
+    <div className="min-h-screen bg-[#e8eaf0] flex items-center justify-center px-4 py-8" dir="rtl">
+      <div className="w-full max-w-md neo-raised rounded-[24px] p-8 sm:p-10">
+        <div className="mb-8 text-center flex flex-col items-center">
+          <div className="w-16 h-16 neo-raised rounded-full flex items-center justify-center mb-4 text-indigo-700 font-black text-2xl">
+            OG
+          </div>
+          <h1 className="text-3xl font-black text-indigo-600">{BRAND.name}</h1>
+          <p className="text-sm text-slate-500 mt-1">{BRAND.taglineAr}</p>
         </div>
+
+        <h2 className="text-2xl font-bold text-slate-800 mb-6 text-right">تسجيل الدخول</h2>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="email" className="block text-sm font-semibold text-slate-700 mb-2">
               البريد الإلكتروني
             </label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="admin@erp.com"
-              required
-            />
+            <div className="relative">
+              <Mail className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full neo-inset rounded-xl px-4 py-3.5 pr-10 text-slate-950 outline-none focus:ring-4 focus:ring-indigo-500/15"
+                placeholder="admin@erp.com"
+                required
+              />
+            </div>
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="password" className="block text-sm font-semibold text-slate-700 mb-2">
               كلمة المرور
             </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="••••••••"
-              required
-            />
+            <div className="relative">
+              <LockKeyhole className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full neo-inset rounded-xl px-4 py-3.5 pr-10 text-slate-950 outline-none focus:ring-4 focus:ring-indigo-500/15"
+                placeholder="••••••••"
+                required
+              />
+            </div>
           </div>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg">
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">
               {error}
             </div>
           )}
@@ -97,13 +108,14 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl neo-raised px-4 py-3.5 font-bold text-indigo-700 transition hover:text-indigo-800 active:scale-[0.99] focus:outline-none focus:ring-4 focus:ring-indigo-500/15 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول'}
+            {loading ? 'جاري تسجيل الدخول...' : 'دخول النظام'}
+            {!loading && <ArrowLeft className="h-4 w-4" />}
           </button>
         </form>
 
-        <div className="mt-6 text-center text-sm text-gray-500">
+        <div className="mt-6 rounded-xl neo-inset px-4 py-3 text-center text-xs text-slate-500">
           <p>للحصول على بيانات الدخول، يرجى الاتصال بالمسؤول</p>
         </div>
       </div>

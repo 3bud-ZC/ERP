@@ -1,10 +1,11 @@
-name: CI/CD Pipeline
+name: CI + VPS Deploy
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
-    branches: [master, main]
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -33,23 +34,87 @@ jobs:
       - name: Build application
         run: npm run build
         env:
-          DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+          DATABASE_URL: postgresql://dummy:dummy@127.0.0.1:5432/dummy
           JWT_SECRET: test-secret
           NEXTAUTH_SECRET: test-nextauth-secret
           NEXTAUTH_URL: http://localhost:3000
-          
+
   deploy:
-    name: Deploy to Railway
+    name: Deploy To VPS
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
-    
+    if: github.event_name != 'pull_request'
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
-      - name: Deploy to Railway
-        uses: bervProject/railway-deploy@main
-        with:
-          railway_token: ${{ secrets.RAILWAY_TOKEN }}
-          service: ${{ secrets.RAILWAY_SERVICE }}
+
+      - name: Build release tarball
+        run: |
+          tar -czf /tmp/abud-platform.tgz \
+            --exclude=node_modules \
+            --exclude=.next \
+            --exclude=.git \
+            --exclude=.env \
+            --exclude='.env.*' \
+            --exclude=artifacts \
+            --exclude=test-results \
+            --exclude=outputs \
+            --exclude=backups \
+            --exclude='*.log' \
+            --exclude=.cursor \
+            .
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Trust VPS host key
+        run: |
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload release
+        run: |
+          scp /tmp/abud-platform.tgz "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/abud-platform.tgz"
+
+      - name: Run remote deployment
+        run: |
+          ssh "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" '
+            set -euo pipefail
+            APP_ROOT="${{ secrets.VPS_APP_ROOT }}"
+            PM2_APP="${{ secrets.VPS_PM2_APP }}"
+            RELEASE_TAG="$(date +%Y%m%d%H%M%S)"
+            RELEASE_DIR="$APP_ROOT/releases/$RELEASE_TAG"
+
+            mkdir -p "$RELEASE_DIR"
+            tar -xzf /tmp/abud-platform.tgz -C "$RELEASE_DIR"
+            cp -f "$APP_ROOT/current/.env" "$RELEASE_DIR/.env"
+
+            cd "$RELEASE_DIR"
+            npm install
+            npx prisma generate
+            npx prisma migrate deploy
+            npm run build
+
+            ln -sfn "$RELEASE_DIR" "$APP_ROOT/current"
+
+            pm2 delete "$PM2_APP" || true
+            cd "$APP_ROOT/current"
+            PORT=3100 pm2 start npm --name "$PM2_APP" -- start
+            pm2 save
+
+            curl -fsS http://127.0.0.1:3100/api/health
+          '
+
+      - name: Post-deploy smoke test
+        run: |
+          ssh "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" "curl -fsS https://erp.abud.fun/api/health"
+
+      - name: Deployment summary
+        run: |
+          echo "Deployment completed successfully."
+          echo "VPS host: ${{ secrets.VPS_HOST }}"
+          echo "App root: ${{ secrets.VPS_APP_ROOT }}"

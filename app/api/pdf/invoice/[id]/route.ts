@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { InvoicePDFGenerator } from '@/lib/pdf/invoice-pdf-generator';
 import { getAuthenticatedUser } from '@/lib/auth';
+import { BRAND } from '@/lib/branding';
 
 export async function GET(
   request: NextRequest,
@@ -16,7 +17,10 @@ export async function GET(
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) {
-      return new NextResponse('Unauthorized', { status: 401 });
+      return new NextResponse('غير مصرح', { status: 401 });
+    }
+    if (!user.tenantId) {
+      return new NextResponse('لم يتم تعيين شركة للمستخدم', { status: 400 });
     }
 
     const { id } = params;
@@ -24,7 +28,7 @@ export async function GET(
     const type = searchParams.get('type'); // 'sales' or 'purchase'
 
     if (!type || (type !== 'sales' && type !== 'purchase')) {
-      return new NextResponse('Invalid invoice type', { status: 400 });
+      return new NextResponse('نوع الفاتورة غير صالح', { status: 400 });
     }
 
     // Fetch invoice data based on type
@@ -32,7 +36,7 @@ export async function GET(
     
     if (type === 'sales') {
       const invoice = await prisma.salesInvoice.findUnique({
-        where: { id },
+        where: { id, tenantId: user.tenantId },
         include: {
           customer: true,
           items: {
@@ -44,7 +48,7 @@ export async function GET(
       });
 
       if (!invoice) {
-        return new NextResponse('Invoice not found', { status: 404 });
+        return new NextResponse('الفاتورة غير موجودة', { status: 404 });
       }
 
       invoiceData = {
@@ -52,8 +56,8 @@ export async function GET(
         invoiceNumber: invoice.invoiceNumber,
         date: invoice.date,
         
-        companyName: 'Factory ERP System',
-        companyNameAr: 'نظام تخطيط موارد المصنع',
+        companyName: BRAND.name,
+        companyNameAr: BRAND.nameAr,
         companyAddress: 'Industrial Area, Riyadh, Saudi Arabia',
         companyPhone: '+966 XX XXX XXXX',
         companyEmail: 'info@factory-erp.com',
@@ -83,7 +87,7 @@ export async function GET(
       };
     } else {
       const invoice = await prisma.purchaseInvoice.findUnique({
-        where: { id },
+        where: { id, tenantId: user.tenantId },
         include: {
           supplier: true,
           items: {
@@ -95,7 +99,7 @@ export async function GET(
       });
 
       if (!invoice) {
-        return new NextResponse('Invoice not found', { status: 404 });
+        return new NextResponse('الفاتورة غير موجودة', { status: 404 });
       }
 
       invoiceData = {
@@ -103,8 +107,8 @@ export async function GET(
         invoiceNumber: invoice.invoiceNumber,
         date: invoice.date,
         
-        companyName: 'Factory ERP System',
-        companyNameAr: 'نظام تخطيط موارد المصنع',
+        companyName: BRAND.name,
+        companyNameAr: BRAND.nameAr,
         companyAddress: 'Industrial Area, Riyadh, Saudi Arabia',
         companyPhone: '+966 XX XXX XXXX',
         companyEmail: 'info@factory-erp.com',

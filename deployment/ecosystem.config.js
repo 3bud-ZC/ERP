@@ -2,8 +2,8 @@ module.exports = {
   apps: [
     {
       name: 'erp-system',
-      script: 'npm',
-      args: 'run start:prod',
+      script: 'node',
+      args: 'scripts/system-start.js',
       cwd: '/var/www/erp',
       env: {
         NODE_ENV: 'production',

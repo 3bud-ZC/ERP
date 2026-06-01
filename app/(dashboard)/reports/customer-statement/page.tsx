@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import {
   ReportShell, ReportLabel, reportInputCls, fmtMoneyEGP, ReportSummaryCard,
@@ -43,7 +43,7 @@ export default function CustomerStatementPage() {
 
   const customersQ = useQuery({
     queryKey: ['customers'],
-    queryFn:  () => apiGet<CustomerLite[]>('/api/customers'),
+    queryFn:  () => apiGetList<CustomerLite>('/api/customers'),
     staleTime: 60_000,
   });
   const customers = useMemo(() => customersQ.data ?? [], [customersQ.data]);
@@ -67,6 +67,7 @@ export default function CustomerStatementPage() {
         title={data ? `كشف حساب — ${data.customer.nameAr}` : 'كشف حساب عميل'}
         subtitle={data ? `الرمز: ${data.customer.code}` : undefined}
         periodLabel={periodLabel}
+        exportConfig={{ report: 'customer-statement', params: { customerId, fromDate: from, toDate: to }, enabled: !!customerId }}
         loading={statementQ.isLoading}
         error={statementQ.error ? (statementQ.error as Error).message : null}
         filters={
@@ -97,7 +98,7 @@ export default function CustomerStatementPage() {
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <ReportSummaryCard label="رصيد افتتاحي" value={fmtMoneyEGP(data.openingBalance)} />
-              <ReportSummaryCard label="إجمالي الفواتير" value={fmtMoneyEGP(data.summary.totalInvoices)} accent="bg-blue-50 border-blue-200" />
+              <ReportSummaryCard label="إجمالي الفواتير" value={fmtMoneyEGP(data.summary.totalInvoices)} accent="bg-emerald-50 border-emerald-200" />
               <ReportSummaryCard label="إجمالي المدفوعات" value={fmtMoneyEGP(data.summary.totalPayments)} accent="bg-emerald-50 border-emerald-200" />
               <ReportSummaryCard label="الرصيد الختامي" value={fmtMoneyEGP(data.summary.closingBalance)} accent="bg-amber-50 border-amber-200" />
             </div>

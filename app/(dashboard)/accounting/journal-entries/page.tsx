@@ -131,7 +131,7 @@ export default function JournalEntriesPage() {
             تحديث
           </button>
           <Link href="/accounting/journal-entries/new"
-            className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium">
+            className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium">
             <Plus className="w-4 h-4" /> قيد جديد
           </Link>
         </>
@@ -168,7 +168,9 @@ export default function JournalEntriesPage() {
                 return (
                   <tr key={e.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-3 text-sm font-semibold text-slate-700 font-mono">
-                      {e.entryNumber ?? e.id.slice(-6).toUpperCase()}
+                      <Link href={`/accounting/journal-entries/${e.id}`} className="text-emerald-700 hover:text-emerald-900">
+                        {e.entryNumber ?? e.id.slice(-6).toUpperCase()}
+                      </Link>
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-500">{fmtDate(e.entryDate ?? e.date ?? e.createdAt)}</td>
                     <td className="px-5 py-3 text-sm text-slate-700 max-w-xs truncate">{e.description ?? '—'}</td>
@@ -194,7 +196,7 @@ export default function JournalEntriesPage() {
                         {!posted && (
                           <>
                             <Link href={`/accounting/journal-entries/${e.id}/edit`} title="تعديل"
-                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
+                              className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded transition-colors">
                               <Pencil className="w-4 h-4" />
                             </Link>
                             <button onClick={() => handlePost(e)} disabled={actionRunning} title="ترحيل"
@@ -258,7 +260,7 @@ export default function JournalEntriesPage() {
             </p>
             <label className="block text-xs font-medium text-slate-700 mb-1">سبب العكس (اختياري)</label>
             <input value={reverseReason} onChange={e => setReverseReason(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               placeholder="مثال: تصحيح خطأ في المبلغ" />
             {actionError && <div className="text-red-600 text-sm bg-red-50 border border-red-200 p-2 rounded mb-3">{actionError}</div>}
             <div className="flex gap-3">

@@ -4,6 +4,7 @@
  */
 
 import { NextResponse } from 'next/server';
+import { toArabicError } from '@/lib/utils/arabic-errors';
 
 export function apiOnboardingRequired() {
   return NextResponse.json(
@@ -32,7 +33,7 @@ export function apiError(message: string, code: number = 500, details?: any): Ne
   return NextResponse.json(
     {
       success: false,
-      message,
+      message: toArabicError(message, message),
       code,
       ...(details && { details }),
     },
@@ -92,9 +93,9 @@ export function handleApiError(error: any, context: string = 'Operation'): NextR
 
   // Custom error with message
   if (error.message) {
-    return apiError(error.message, 400);
+    return apiError(toArabicError(error), 400);
   }
 
   // Generic error
-  return apiError(`${context} failed`, 500);
+  return apiError('حدث خطأ غير متوقع، حاول مرة أخرى', 500);
 }

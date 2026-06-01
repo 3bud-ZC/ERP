@@ -22,7 +22,8 @@ globalForPrisma.prisma = prisma
 //   findFirst({ where: { id, tenantId: user.tenantId } })
 // which is safer, race-free, and works for all model shapes.
 
-// Verify database connection on startup
-prisma.$connect().catch((error) => {
-  console.error('❌ Database connection failed:', error);
-});
+// IMPORTANT:
+// Do NOT call `prisma.$connect()` on module import.
+// In Next.js, this file can be evaluated during build-time (`next build`) and in edge cases
+// where the DB is not reachable, it causes repeated connection attempts + noisy logs.
+// Prisma connects lazily on the first query, and health endpoints already validate DB reachability.

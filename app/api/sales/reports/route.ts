@@ -8,10 +8,12 @@ export const revalidate = 0;
 
 export async function GET(request: Request) {
   try {
-    // Auth check
     const user = await getAuthenticatedUser(request);
     if (!user) {
       return apiError('لم يتم المصادقة', 401);
+    }
+    if (!user.tenantId) {
+      return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
     const { searchParams } = new URL(request.url);
@@ -26,9 +28,11 @@ export async function GET(request: Request) {
     const from = fromDate ? new Date(fromDate) : new Date(now.getFullYear(), now.getMonth(), 1);
     const to = toDate ? new Date(toDate) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-    // Build where clause
+    const tenantId = user.tenantId;
+
     const where: any = {
-      createdAt: { gte: from, lte: to },
+      tenantId,
+      date: { gte: from, lte: to },
     };
     if (customerId) {
       where.customerId = customerId;
@@ -48,7 +52,7 @@ export async function GET(request: Request) {
           },
         },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { date: 'desc' },
     });
 
     // Filter by product if specified
@@ -61,18 +65,18 @@ export async function GET(request: Request) {
       );
 
       // Calculate product specific data
-      const productItems = filteredInvoices.flatMap(inv => 
-        inv.items.filter(item => item.productId === productId)
+      const productItems = filteredInvoices.flatMap(inv =>
+        inv.items.filter(item => item.productId === productId).map(item => ({
+          price: item.price,
+          quantity: item.quantity,
+          date: inv.date,
+        }))
       );
 
       const totalSoldQuantity = productItems.reduce((sum, item) => sum + item.quantity, 0);
       const customers = Array.from(new Set(filteredInvoices.map(inv => inv.customer?.nameAr).filter(Boolean)));
       
-      const saleDetails = productItems.map(item => ({
-        price: item.price,
-        quantity: item.quantity,
-        date: invoices.find(inv => inv.items.includes(item))?.createdAt,
-      }));
+      const saleDetails = productItems;
 
       // Calculate average selling price
       const avgPrice = saleDetails.length > 0 
@@ -80,8 +84,8 @@ export async function GET(request: Request) {
         : 0;
 
       // Get remaining stock for the product
-      const product = await prisma.product.findUnique({
-        where: { id: productId },
+      const product = await prisma.product.findFirst({
+        where: { id: productId, tenantId },
         select: { stock: true }
       });
 
@@ -124,7 +128,8 @@ export async function GET(request: Request) {
       const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59);
 
       const monthWhere: any = {
-        createdAt: { gte: monthStart, lte: monthEnd },
+        tenantId,
+        date: { gte: monthStart, lte: monthEnd },
       };
       if (customerId) monthWhere.customerId = customerId;
       if (paymentStatus) monthWhere.paymentStatus = paymentStatus;
@@ -152,7 +157,7 @@ export async function GET(request: Request) {
         from: from.toISOString(),
         to: to.toISOString(),
       },
-    }, 'Sales reports fetched successfully');
+    }, 'تم جلب تقرير المبيعات بنجاح');
   } catch (error) {
     console.error('Error fetching sales reports:', error);
     return apiError('فشل في تحميل تقارير المبيعات', 500);

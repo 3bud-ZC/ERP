@@ -3,7 +3,7 @@ import {
   applyProductionWasteOutflow,
   applyProductionWasteReversal,
 } from '@/lib/services/inventory-movement.service';
-import { InvoiceExecutionError } from '@/lib/services/invoice-execution.service';
+import { InvoiceExecutionError } from '@/lib/services/execution-errors';
 import { getAvailableStock } from '@/lib/services/warehouse-stock.service';
 
 export async function executeCreateProductionWaste(params: {

@@ -21,6 +21,10 @@ function main() {
   if (!url) fail('DATABASE_URL not set');
   if (!url!.startsWith('postgres')) fail('only postgresql backups supported', { urlPrefix: url!.slice(0, 10) });
 
+  // Prisma-style DATABASE_URLs may include query params like `?schema=public`.
+  // pg_dump rejects unknown query params, so strip them for the backup connection string.
+  const pgUrl = url.split('?')[0];
+
   const dir = process.env.BACKUP_DIR || './backups';
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -33,7 +37,7 @@ function main() {
 
   try {
     log('info', 'starting pg_dump', { outFile });
-    execSync(`pg_dump --no-owner --format=plain "${url}" > "${outFile}"`, { stdio: ['ignore', 'inherit', 'inherit'], shell: '/bin/bash' as any });
+    execSync(`pg_dump --no-owner --format=plain "${pgUrl}" > "${outFile}"`, { stdio: ['ignore', 'inherit', 'inherit'], shell: '/bin/bash' as any });
     const size = statSync(outFile).size;
     if (size === 0) fail('backup file is empty', { outFile });
     log('info', 'backup completed', { outFile, sizeBytes: size });

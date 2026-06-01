@@ -12,6 +12,8 @@ import {
 } from './InvoiceConfig';
 import { InvoiceLayout } from './InvoiceLayout';
 import { DocumentStatusBadge } from './DocumentStatusBadge';
+import { PaymentModal } from '@/components/accounting/PaymentModal';
+import { WalletCards } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface DetailItem {
@@ -27,8 +29,8 @@ interface DetailItem {
 interface DetailInvoice {
   id: string;
   invoiceNumber: string;
-  customer?: { nameAr?: string; phone?: string | null; email?: string | null };
-  supplier?: { nameAr?: string; phone?: string | null; email?: string | null };
+  customer?: { id?: string; nameAr?: string; phone?: string | null; email?: string | null };
+  supplier?: { id?: string; nameAr?: string; phone?: string | null; email?: string | null };
   date: string;
   issueDate?: string | null;
   status?: string;
@@ -56,6 +58,7 @@ export function InvoiceDetail({ config }: { config: InvoiceConfig }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [paymentOpen, setPaymentOpen] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -151,6 +154,12 @@ export function InvoiceDetail({ config }: { config: InvoiceConfig }) {
             className="text-sm text-slate-600 hover:text-slate-900 flex items-center gap-1 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50">
             <Printer className="w-4 h-4" /> طباعة
           </Link>
+          {inv.paymentStatus !== 'paid' && inv.status !== 'cancelled' && config.kind === 'purchase' && (
+            <button onClick={() => setPaymentOpen(true)}
+              className="text-sm text-emerald-700 hover:bg-emerald-50 flex items-center gap-1 border border-emerald-200 rounded-lg px-3 py-2">
+              <WalletCards className="w-4 h-4" /> سداد
+            </button>
+          )}
           <Link href={`/invoices/${config.routeBase}/${inv.id}/edit`}
             className="text-sm text-amber-700 hover:bg-amber-50 flex items-center gap-1 border border-amber-200 rounded-lg px-3 py-2">
             <Pencil className="w-4 h-4" /> تعديل
@@ -196,7 +205,7 @@ export function InvoiceDetail({ config }: { config: InvoiceConfig }) {
         {/* Totals */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
           <h3 className="text-xs font-semibold text-slate-500 mb-2">الإجماليات</h3>
-          <div className="text-2xl font-bold text-blue-700 tabular-nums">{fmtMoney(totals.grand)}</div>
+          <div className="text-2xl font-bold text-emerald-800 tabular-nums">{fmtMoney(totals.grand)}</div>
           {totals.balance > 0 && (
             <p className="text-xs text-red-600 mt-1">رصيد مستحق: {fmtMoney(totals.balance)}</p>
           )}
@@ -295,6 +304,21 @@ export function InvoiceDetail({ config }: { config: InvoiceConfig }) {
             </div>
           </div>
         </div>
+      )}
+
+      {paymentOpen && (
+        <PaymentModal
+          isOpen={paymentOpen}
+          onClose={() => setPaymentOpen(false)}
+          invoiceId={inv.id}
+          supplierId={inv.supplier?.id}
+          defaultAmount={totals.balance}
+          onSuccess={() => {
+            showToast('تم السداد بنجاح', 'success');
+            setPaymentOpen(false);
+            window.location.reload();
+          }}
+        />
       )}
     </InvoiceLayout>
   );

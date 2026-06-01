@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { ArrowRight, Layers, Plus, Trash2, AlertCircle, Package } from 'lucide-react';
 import { Toast, useToast } from '@/components/ui/patterns';
 import { Section } from '@/components/ui/modal';
@@ -32,12 +32,12 @@ export default function BOMEditPage() {
 
   const productsQ = useQuery({
     queryKey: ['products'],
-    queryFn:  () => apiGet<ProductLite[]>('/api/products'),
+    queryFn:  () => apiGetList<ProductLite>('/api/products'),
     staleTime: 60_000,
   });
   const bomQ = useQuery({
     queryKey: ['bom', productId],
-    queryFn:  () => apiGet<BOMItemEntry[]>(`/api/bom?productId=${productId}`),
+    queryFn:  () => apiGetList<BOMItemEntry>(`/api/bom?productId=${productId}`),
   });
 
   const products = useMemo(() => productsQ.data ?? [], [productsQ.data]);
@@ -174,7 +174,7 @@ export default function BOMEditPage() {
                               const v = parseFloat(e.target.value);
                               if (v && v !== b.quantity) handleUpdateQty(b.id, v);
                             }}
-                            className="w-24 border border-slate-300 rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums" />
+                            className="w-24 border border-slate-300 rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-emerald-500 tabular-nums" />
                           <span className="text-xs text-slate-500">{b.material.unit ?? ''}</span>
                         </div>
                       </td>
@@ -202,7 +202,7 @@ export default function BOMEditPage() {
             )}
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
               <select value={addMaterial} onChange={e => setAddMaterial(e.target.value)}
-                className="sm:col-span-7 w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-4 focus:ring-blue-500/15 focus:border-blue-500"
+                className="sm:col-span-7 w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-4 focus:ring-emerald-500/15 focus:border-emerald-500"
               >
                 <option value="">— اختر المادة —</option>
                 {availableMaterials.map(m => (
@@ -212,10 +212,10 @@ export default function BOMEditPage() {
 
               <input type="number" min="0.01" step="0.01" value={addQty}
                 onChange={e => setAddQty(e.target.value)} placeholder="الكمية"
-                className="sm:col-span-3 w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-4 focus:ring-blue-500/15 focus:border-blue-500 tabular-nums" />
+                className="sm:col-span-3 w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-4 focus:ring-emerald-500/15 focus:border-emerald-500 tabular-nums" />
 
               <button type="submit" disabled={adding}
-                className="sm:col-span-2 w-full px-4 py-2.5 bg-gradient-to-br from-blue-600 to-indigo-600 text-white rounded-xl text-sm font-semibold hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 transition-all flex items-center justify-center gap-1"
+                className="sm:col-span-2 w-full px-4 py-2.5 bg-gradient-to-br from-slate-950 to-emerald-800 text-white rounded-xl text-sm font-semibold hover:from-slate-900 hover:to-emerald-900 disabled:opacity-50 transition-all flex items-center justify-center gap-1"
               >
                 <Plus className="w-4 h-4" /> {adding ? '…' : 'إضافة'}
               </button>

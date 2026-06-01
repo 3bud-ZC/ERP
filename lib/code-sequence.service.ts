@@ -15,38 +15,46 @@ export const CODE_ENTITY_KEYS = {
   SALES_INVOICE: 'SALES_INVOICE',
   PURCHASE_INVOICE: 'PURCHASE_INVOICE',
   PRODUCTION_ORDER: 'PRODUCTION_ORDER',
+  PRODUCTION_LINE: 'PRODUCTION_LINE',
   JOURNAL_ENTRY: 'JOURNAL_ENTRY',
   STOCK_TRANSFER: 'STOCK_TRANSFER',
   GOODS_RECEIPT: 'GOODS_RECEIPT',
   STOCK_ADJUSTMENT: 'STOCK_ADJUSTMENT',
+  CASHBOX: 'CASHBOX',
 } as const;
 
 export type CodeEntityKey = (typeof CODE_ENTITY_KEYS)[keyof typeof CODE_ENTITY_KEYS];
 
 const ENTITY_PREFIX: Record<CodeEntityKey, string> = {
   CUSTOMER: 'CUS',
-  SUPPLIER: 'SUP',
-  RAW_MATERIAL: 'RM',
-  FINISHED_PRODUCT: 'FG',
-  WAREHOUSE: 'WH',
-  SALES_INVOICE: 'INV',
-  PURCHASE_INVOICE: 'PINV',
+  SUPPLIER: 'VEN',
+  RAW_MATERIAL: 'RAW',
+  FINISHED_PRODUCT: 'PRD',
+  WAREHOUSE: 'WRH',
+  SALES_INVOICE: 'SAL',
+  PURCHASE_INVOICE: 'PUR',
   PRODUCTION_ORDER: 'PO',
+  PRODUCTION_LINE: 'PL',
   JOURNAL_ENTRY: 'JE',
   STOCK_TRANSFER: 'ST',
   GOODS_RECEIPT: 'GR',
   STOCK_ADJUSTMENT: 'ADJ',
+  CASHBOX: 'CB',
 };
 
 /** Legacy prefixes still honored when seeding sequence floor */
 const LEGACY_PREFIXES: Partial<Record<CodeEntityKey, string[]>> = {
-  PURCHASE_INVOICE: ['PI'],
+  SUPPLIER: ['SUP'],
+  RAW_MATERIAL: ['RM'],
+  FINISHED_PRODUCT: ['FG', 'PR'],
+  WAREHOUSE: ['WH'],
+  SALES_INVOICE: ['INV', 'SI'],
+  PURCHASE_INVOICE: ['PINV', 'PI'],
   STOCK_ADJUSTMENT: ['SA'],
-  SALES_INVOICE: ['SI'],
 };
 
-const SEQ_PAD = 6;
-const MAX_UNIQUE_RETRIES = 8;
+const SEQ_PAD = 5;
+const MAX_UNIQUE_RETRIES = 500;
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -106,21 +114,21 @@ export async function computeSequenceFloor(
   switch (entityKey) {
     case 'CUSTOMER': {
       const rows = await db.customer.findMany({
-        where: { OR: codeOr('code') },
+        where: { tenantId, OR: codeOr('code') },
         select: { code: true },
       });
       return collect(rows.map((r) => r.code));
     }
     case 'SUPPLIER': {
       const rows = await db.supplier.findMany({
-        where: { OR: codeOr('code') },
+        where: { tenantId, OR: codeOr('code') },
         select: { code: true },
       });
       return collect(rows.map((r) => r.code));
     }
     case 'RAW_MATERIAL': {
       const rows = await db.product.findMany({
-        where: { type: 'raw_material', OR: codeOr('code') },
+        where: { tenantId, type: 'raw_material', OR: codeOr('code') },
         select: { code: true },
       });
       return collect(rows.map((r) => r.code));
@@ -128,6 +136,7 @@ export async function computeSequenceFloor(
     case 'FINISHED_PRODUCT': {
       const rows = await db.product.findMany({
         where: {
+          tenantId,
           type: 'finished_product',
           OR: [...codeOr('code'), { code: { startsWith: `PRD-${year}-` } }],
         },
@@ -137,7 +146,7 @@ export async function computeSequenceFloor(
     }
     case 'WAREHOUSE': {
       const rows = await db.warehouse.findMany({
-        where: { OR: codeOr('code') },
+        where: { tenantId, OR: codeOr('code') },
         select: { code: true },
       });
       return collect(rows.map((r) => r.code));
@@ -163,9 +172,17 @@ export async function computeSequenceFloor(
       });
       return collect(rows.map((r) => r.orderNumber));
     }
+    case 'PRODUCTION_LINE': {
+      const rows = await (db as any).productionLine.findMany({
+        where: { tenantId, OR: codeOr('code') },
+        select: { code: true },
+      });
+      return collect(rows.map((r: { code: string }) => r.code));
+    }
     case 'JOURNAL_ENTRY': {
       const rows = await db.journalEntry.findMany({
-        where: { tenantId },
+        // entryNumber is globally unique in current schema, so floor must be global too.
+        // Otherwise a new tenant may collide with previously used JE numbers in other tenants.
         select: { entryNumber: true },
       });
       return collect(rows.map((r) => r.entryNumber));
@@ -190,6 +207,13 @@ export async function computeSequenceFloor(
         select: { adjustmentNumber: true },
       });
       return collect(rows.map((r) => r.adjustmentNumber));
+    }
+    case 'CASHBOX': {
+      const rows = await (db as any).cashbox.findMany({
+        where: { tenantId, OR: codeOr('code') },
+        select: { code: true },
+      });
+      return collect(rows.map((r: { code: string }) => r.code));
     }
     default:
       return 0;
@@ -236,6 +260,13 @@ export async function nextEntityCode(
         return code;
       }
     }
+    // Final safe fallback for very rare high-contention/global-unique collisions
+    // (notably JOURNAL_ENTRY). Keep prefix/year format and force uniqueness by suffix.
+    const emergencySeq = Date.now().toString().slice(-8);
+    const emergencyCode = `${prefix}-${year}-${emergencySeq}`;
+    if (await isCodeAvailable(client, entityKey, emergencyCode)) {
+      return emergencyCode;
+    }
     throw new Error(`Failed to allocate unique code for ${entityKey} after ${MAX_UNIQUE_RETRIES} attempts`);
   };
 
@@ -251,20 +282,26 @@ export async function nextEntityCode(
 }
 
 /**
- * Use client-provided code when non-empty; otherwise allocate next.
+ * Allocate next code — backend only; never accepts client input.
  */
-export async function resolveEntityCode(
-  provided: string | null | undefined,
+export async function allocateEntityCode(
   entityKey: CodeEntityKey,
   tenantId: string,
   tx?: Prisma.TransactionClient,
   year: number = new Date().getFullYear(),
 ): Promise<string> {
-  const trimmed = (provided ?? '').trim();
-  if (trimmed.length > 0) {
-    return trimmed;
-  }
   return nextEntityCode(entityKey, tenantId, tx, year);
+}
+
+/** @deprecated Client-provided codes are ignored — use allocateEntityCode */
+export async function resolveEntityCode(
+  _provided: string | null | undefined,
+  entityKey: CodeEntityKey,
+  tenantId: string,
+  tx?: Prisma.TransactionClient,
+  year: number = new Date().getFullYear(),
+): Promise<string> {
+  return allocateEntityCode(entityKey, tenantId, tx, year);
 }
 
 export function productCodeEntityKey(productType: string): CodeEntityKey {
@@ -280,20 +317,30 @@ async function isCodeAvailable(
 ): Promise<boolean> {
   switch (entityKey) {
     case 'CUSTOMER':
-      return (await client.customer.findUnique({ where: { code }, select: { id: true } })) === null;
+      return (
+        await client.customer.findFirst({ where: { code }, select: { id: true } })
+      ) === null;
     case 'SUPPLIER':
-      return (await client.supplier.findUnique({ where: { code }, select: { id: true } })) === null;
+      return (
+        await client.supplier.findFirst({ where: { code }, select: { id: true } })
+      ) === null;
     case 'RAW_MATERIAL':
     case 'FINISHED_PRODUCT':
-      return (await client.product.findUnique({ where: { code }, select: { id: true } })) === null;
+      return (
+        await client.product.findFirst({ where: { code }, select: { id: true } })
+      ) === null;
     case 'WAREHOUSE':
-      return (await client.warehouse.findUnique({ where: { code }, select: { id: true } })) === null;
+      return (
+        await client.warehouse.findFirst({ where: { code }, select: { id: true } })
+      ) === null;
     case 'SALES_INVOICE':
       return (await client.salesInvoice.findUnique({ where: { invoiceNumber: code }, select: { id: true } })) === null;
     case 'PURCHASE_INVOICE':
       return (await client.purchaseInvoice.findUnique({ where: { invoiceNumber: code }, select: { id: true } })) === null;
     case 'PRODUCTION_ORDER':
       return (await client.productionOrder.findUnique({ where: { orderNumber: code }, select: { id: true } })) === null;
+    case 'PRODUCTION_LINE':
+      return (await (client as any).productionLine.findUnique({ where: { code }, select: { id: true } })) === null;
     case 'JOURNAL_ENTRY':
       return (await client.journalEntry.findUnique({ where: { entryNumber: code }, select: { id: true } })) === null;
     case 'STOCK_TRANSFER':
@@ -302,6 +349,8 @@ async function isCodeAvailable(
       return (await client.goodsReceipt.findUnique({ where: { receiptNumber: code }, select: { id: true } })) === null;
     case 'STOCK_ADJUSTMENT':
       return (await client.stockAdjustment.findUnique({ where: { adjustmentNumber: code }, select: { id: true } })) === null;
+    case 'CASHBOX':
+      return (await (client as any).cashbox.findUnique({ where: { code }, select: { id: true } })) === null;
     default:
       return true;
   }

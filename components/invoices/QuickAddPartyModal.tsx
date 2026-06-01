@@ -28,7 +28,7 @@ interface Props {
   onCreated: (party: CreatedParty) => void;
 }
 
-const initialForm = { nameAr: '', code: '', phone: '', email: '' };
+const initialForm = { nameAr: '', phone: '', email: '' };
 
 export function QuickAddPartyModal({ config, open, onClose, onCreated }: Props) {
   const [form, setForm] = useState(initialForm);
@@ -48,15 +48,11 @@ export function QuickAddPartyModal({ config, open, onClose, onCreated }: Props) 
     if (!form.nameAr.trim()) { setError('الاسم مطلوب'); return; }
     setBusy(true); setError(null);
 
-    // Auto-generate a code if the user didn't type one.
-    const code = form.code.trim() || `${config.kind === 'sales' ? 'CUS' : 'SUP'}-${Date.now().toString().slice(-6)}`;
-
     try {
       const res = await fetch(config.partyApi, {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          code,
           nameAr: form.nameAr.trim(),
           ...(form.phone.trim() && { phone: form.phone.trim() }),
           ...(form.email.trim() && { email: form.email.trim() }),
@@ -110,13 +106,6 @@ export function QuickAddPartyModal({ config, open, onClose, onCreated }: Props) 
               value={form.nameAr}
               onChange={e => setForm(f => ({ ...f, nameAr: e.target.value }))}
               placeholder={config.kind === 'sales' ? 'مثلاً: شركة الأمل' : 'مثلاً: مؤسسة المورد'}
-              className="sm:col-span-2"
-            />
-            <Field
-              label="الرمز"
-              value={form.code}
-              onChange={e => setForm(f => ({ ...f, code: e.target.value }))}
-              placeholder={config.kind === 'sales' ? 'CUS-001 (يُولّد تلقائياً إن تُرك فارغاً)' : 'SUP-001 (يُولّد تلقائياً إن تُرك فارغاً)'}
               className="sm:col-span-2"
             />
           </FieldGrid>

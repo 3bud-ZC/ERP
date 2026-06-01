@@ -8,6 +8,9 @@ import { accountingService } from '@/lib/accounting/accounting.service';
 import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { apiError, apiSuccess, handleApiError } from '@/lib/api-response';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 // ============================================================================
 // GET /api/accounting/balances
 // Get account balances

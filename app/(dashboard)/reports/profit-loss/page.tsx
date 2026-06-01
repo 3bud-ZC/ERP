@@ -40,6 +40,7 @@ export default function ProfitLossPage() {
         title="قائمة الدخل (P&L)"
         subtitle="الإيرادات، تكلفة المبيعات، والمصروفات التشغيلية"
         periodLabel={periodLabel}
+        exportConfig={{ report: 'profit-loss', params: { fromDate: from, toDate: to } }}
         loading={reportQ.isLoading}
         error={reportQ.error ? (reportQ.error as Error).message : null}
         filters={
@@ -60,7 +61,7 @@ export default function ProfitLossPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <ReportSummaryCard label="إجمالي الإيرادات" value={fmtMoneyEGP(data.revenue.total)} accent="bg-emerald-50 border-emerald-200" />
               <ReportSummaryCard label="تكلفة المبيعات" value={fmtMoneyEGP(data.cogs.total)} accent="bg-amber-50 border-amber-200" />
-              <ReportSummaryCard label="مجمل الربح" value={fmtMoneyEGP(data.grossProfit)} accent="bg-blue-50 border-blue-200" />
+              <ReportSummaryCard label="مجمل الربح" value={fmtMoneyEGP(data.grossProfit)} accent="bg-emerald-50 border-emerald-200" />
               <ReportSummaryCard label="صافي الربح"
                 value={fmtMoneyEGP(data.netProfit)}
                 accent={data.netProfit >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'} />
@@ -68,9 +69,9 @@ export default function ProfitLossPage() {
 
             <PLSection title="الإيرادات" lines={data.revenue.lines} total={data.revenue.total} positive />
             <PLSection title="تكلفة المبيعات" lines={data.cogs.lines} total={data.cogs.total} />
-            <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-4 text-sm flex justify-between items-center">
-              <span className="font-semibold text-blue-900">مجمل الربح</span>
-              <span className="font-bold text-blue-900 tabular-nums">{fmtMoneyEGP(data.grossProfit)}</span>
+            <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4 text-sm flex justify-between items-center">
+              <span className="font-semibold text-slate-950">مجمل الربح</span>
+              <span className="font-bold text-slate-950 tabular-nums">{fmtMoneyEGP(data.grossProfit)}</span>
             </div>
             <PLSection title="المصروفات التشغيلية" lines={data.operatingExpenses.lines} total={data.operatingExpenses.total} />
             <div className={`${data.netProfit >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'} border rounded-xl p-4 text-sm flex justify-between items-center`}>

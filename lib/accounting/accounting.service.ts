@@ -8,6 +8,13 @@ import { journalEntryService, CreateJournalEntryInput } from './journal-entry.se
 import { accountingPeriodService } from './period.service';
 import { prisma } from '../db';
 
+const LEGACY_GL_DISABLED =
+  'Legacy accountingService GL posting is disabled; use canonical execution services.';
+
+function rejectLegacyGl(): never {
+  throw new Error(LEGACY_GL_DISABLED);
+}
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -89,75 +96,8 @@ export class AccountingService {
    * Debit: Cost of Goods Sold
    * Credit: Inventory
    */
-  async recordSales(input: SalesAccountingInput) {
-    // Get current open period if not provided
-    let periodId = input.accountingPeriodId;
-    let fiscalYearId = input.fiscalYearId;
-
-    if (!periodId) {
-      const openPeriod = await accountingPeriodService.getCurrentOpenPeriod(input.tenantId, input.invoiceDate);
-      if (openPeriod) {
-        periodId = openPeriod.id;
-        fiscalYearId = openPeriod.fiscalYearId;
-      }
-    }
-
-    // Create journal entry
-    const journalEntryInput: CreateJournalEntryInput = {
-      tenantId: input.tenantId,
-      entryDate: input.invoiceDate,
-      description: `Sales Invoice ${input.invoiceNumber} - Customer ${input.customerId}`,
-      referenceType: 'SalesInvoice',
-      referenceId: input.invoiceId,
-      fiscalYearId,
-      accountingPeriodId: periodId,
-      sourceEventId: input.sourceEventId,
-      correlationId: input.correlationId,
-      createdBy: input.createdBy,
-      lines: [
-        {
-          accountCode: '1020', // Accounts Receivable
-          debit: input.total,
-          credit: 0,
-          description: `Customer: ${input.customerId}`,
-        },
-        {
-          accountCode: '4010', // Sales Revenue
-          debit: 0,
-          credit: input.total,
-          description: `Sales Invoice ${input.invoiceNumber}`,
-        },
-      ],
-    };
-
-    // Add COGS and inventory lines if cost is provided
-    if (input.costOfGoodsSold > 0 && journalEntryInput.lines) {
-      journalEntryInput.lines.push(
-        {
-          accountCode: '5010', // Cost of Goods Sold
-          debit: input.costOfGoodsSold,
-          credit: 0,
-          description: `COGS for Invoice ${input.invoiceNumber}`,
-        },
-        {
-          accountCode: '1030', // Inventory
-          debit: 0,
-          credit: input.costOfGoodsSold,
-          description: `Inventory reduction for Invoice ${input.invoiceNumber}`,
-        }
-      );
-    }
-
-    const entry = await journalEntryService.createDraftEntry(journalEntryInput);
-
-    // Auto-post the entry
-    await journalEntryService.postEntry({
-      tenantId: input.tenantId,
-      entryId: entry.id,
-      postedBy: input.createdBy || 'system',
-    });
-
-    return entry;
+  async recordSales(_input: SalesAccountingInput): Promise<never> {
+    rejectLegacyGl();
   }
 
   /**
@@ -165,56 +105,8 @@ export class AccountingService {
    * Debit: Inventory
    * Credit: Accounts Payable
    */
-  async recordPurchase(input: PurchaseAccountingInput) {
-    // Get current open period if not provided
-    let periodId = input.accountingPeriodId;
-    let fiscalYearId = input.fiscalYearId;
-
-    if (!periodId) {
-      const openPeriod = await accountingPeriodService.getCurrentOpenPeriod(input.tenantId, input.purchaseDate);
-      if (openPeriod) {
-        periodId = openPeriod.id;
-        fiscalYearId = openPeriod.fiscalYearId;
-      }
-    }
-
-    const journalEntryInput: CreateJournalEntryInput = {
-      tenantId: input.tenantId,
-      entryDate: input.purchaseDate,
-      description: `Purchase Invoice ${input.purchaseNumber} - Supplier ${input.supplierId}`,
-      referenceType: 'PurchaseInvoice',
-      referenceId: input.purchaseId,
-      fiscalYearId,
-      accountingPeriodId: periodId,
-      sourceEventId: input.sourceEventId,
-      correlationId: input.correlationId,
-      createdBy: input.createdBy,
-      lines: [
-        {
-          accountCode: '1030', // Inventory
-          debit: input.total,
-          credit: 0,
-          description: `Purchase from Supplier ${input.supplierId}`,
-        },
-        {
-          accountCode: '2010', // Accounts Payable
-          debit: 0,
-          credit: input.total,
-          description: `Supplier: ${input.supplierId}`,
-        },
-      ],
-    };
-
-    const entry = await journalEntryService.createDraftEntry(journalEntryInput);
-
-    // Auto-post the entry
-    await journalEntryService.postEntry({
-      tenantId: input.tenantId,
-      entryId: entry.id,
-      postedBy: input.createdBy || 'system',
-    });
-
-    return entry;
+  async recordPurchase(_input: PurchaseAccountingInput): Promise<never> {
+    rejectLegacyGl();
   }
 
   /**
@@ -222,79 +114,8 @@ export class AccountingService {
    * Debit: Cash/Bank
    * Credit: Accounts Receivable (or Debit Accounts Payable for supplier payments)
    */
-  async recordPayment(input: PaymentAccountingInput) {
-    // Get current open period if not provided
-    let periodId = input.accountingPeriodId;
-    let fiscalYearId = input.fiscalYearId;
-
-    if (!periodId) {
-      const openPeriod = await accountingPeriodService.getCurrentOpenPeriod(input.tenantId, input.paymentDate);
-      if (openPeriod) {
-        periodId = openPeriod.id;
-        fiscalYearId = openPeriod.fiscalYearId;
-      }
-    }
-
-    const journalEntryInput: CreateJournalEntryInput = {
-      tenantId: input.tenantId,
-      entryDate: input.paymentDate,
-      description: input.customerId
-        ? `Payment received - Customer ${input.customerId}`
-        : `Payment made - Supplier ${input.supplierId}`,
-      referenceType: 'Payment',
-      referenceId: input.paymentId,
-      fiscalYearId,
-      accountingPeriodId: periodId,
-      sourceEventId: input.sourceEventId,
-      correlationId: input.correlationId,
-      createdBy: input.createdBy,
-      lines: [],
-    };
-
-    if (input.customerId) {
-      // Customer payment
-      journalEntryInput.lines = [
-        {
-          accountCode: '1011', // Cash
-          debit: input.amount,
-          credit: 0,
-          description: `Payment from Customer ${input.customerId}`,
-        },
-        {
-          accountCode: '1020', // Accounts Receivable
-          debit: 0,
-          credit: input.amount,
-          description: `Customer: ${input.customerId}`,
-        },
-      ];
-    } else if (input.supplierId) {
-      // Supplier payment
-      journalEntryInput.lines = [
-        {
-          accountCode: '2010', // Accounts Payable
-          debit: input.amount,
-          credit: 0,
-          description: `Payment to Supplier ${input.supplierId}`,
-        },
-        {
-          accountCode: '1011', // Cash
-          debit: 0,
-          credit: input.amount,
-          description: `Payment to Supplier ${input.supplierId}`,
-        },
-      ];
-    }
-
-    const entry = await journalEntryService.createDraftEntry(journalEntryInput);
-
-    // Auto-post the entry
-    await journalEntryService.postEntry({
-      tenantId: input.tenantId,
-      entryId: entry.id,
-      postedBy: input.createdBy || 'system',
-    });
-
-    return entry;
+  async recordPayment(_input: PaymentAccountingInput): Promise<never> {
+    rejectLegacyGl();
   }
 
   /**

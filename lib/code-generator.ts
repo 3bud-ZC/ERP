@@ -35,11 +35,11 @@ export async function generateAutoCode(
   const key = LEGACY_ENTITY_MAP[entityType];
   if (!key || !tenantId) {
     const prefixes: Record<string, string> = {
-      product: 'FG',
-      raw_material: 'RM',
-      warehouse: 'WH',
+      product: 'PRD',
+      raw_material: 'RAW',
+      warehouse: 'WRH',
       customer: 'CUS',
-      supplier: 'SUP',
+      supplier: 'VEN',
     };
     const prefix = prefixes[entityType] || 'CODE';
     const year = new Date().getFullYear();

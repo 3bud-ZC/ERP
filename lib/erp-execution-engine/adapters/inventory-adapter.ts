@@ -8,6 +8,11 @@
 
 import { ERPTransaction, ERPTransactionType } from '../types';
 import { prisma } from '@/lib/db';
+import {
+  applySalesOutflow,
+  applyPurchaseInflow,
+  applySalesReturnInflow,
+} from '@/lib/services/inventory-movement.service';
 
 /**
  * Stock Operation Errors
@@ -198,35 +203,20 @@ export class InventoryAdapter {
   private static async handleSalesInvoice(result: any): Promise<void> {
     if (!result.items || result.items.length === 0) return;
 
-    // Use transaction to ensure ALL items succeed or ALL fail
-    await prisma.$transaction(async (tx) => {
-      for (const item of result.items) {
-        // ATOMIC: Decrement stock with check
-        await atomicDecrementStock(
-          item.productId,
-          item.quantity,
-          result.tenantId,
-          tx
-        );
-
-        // Record inventory transaction
-        await recordInventoryTransaction({
-          productId: item.productId,
-          type: 'sale',
-          quantity: -item.quantity,
-          referenceId: result.id,
-          referenceType: 'SalesInvoice',
-          unitCost: item.unitCost || 0,
-          totalCost: (item.unitCost || 0) * item.quantity,
-          tenantId: result.tenantId,
-        }, tx);
-      }
-    }, {
-      // Transaction options for better concurrency handling
-      isolationLevel: 'Serializable', // Highest isolation for stock operations
-      maxWait: 5000, // Max 5s waiting for lock
-      timeout: 10000, // 10s total timeout
-    });
+    await prisma.$transaction(
+      async tx => {
+        for (const item of result.items) {
+          await applySalesOutflow(
+            tx,
+            result.tenantId,
+            { productId: item.productId, quantity: item.quantity },
+            'SalesInvoice',
+            result.id,
+          );
+        }
+      },
+      { isolationLevel: 'Serializable', maxWait: 5000, timeout: 10000 },
+    );
   }
 
   /**
@@ -235,25 +225,18 @@ export class InventoryAdapter {
   private static async handleSalesReturn(result: any): Promise<void> {
     if (!result.items || result.items.length === 0) return;
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async tx => {
       for (const item of result.items) {
-        await atomicIncrementStock(
-          item.productId,
-          item.quantity,
+        await applySalesReturnInflow(
+          tx,
           result.tenantId,
-          tx
+          {
+            productId: item.productId,
+            quantity: item.quantity,
+            unitCost: item.unitCost || 0,
+          },
+          result.id,
         );
-
-        await recordInventoryTransaction({
-          productId: item.productId,
-          type: 'sales_return',
-          quantity: item.quantity,
-          referenceId: result.id,
-          referenceType: 'SalesReturn',
-          unitCost: item.unitCost || 0,
-          totalCost: (item.unitCost || 0) * item.quantity,
-          tenantId: result.tenantId,
-        }, tx);
       }
     });
   }
@@ -264,37 +247,19 @@ export class InventoryAdapter {
   private static async handlePurchaseInvoice(result: any): Promise<void> {
     if (!result.items || result.items.length === 0) return;
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async tx => {
       for (const item of result.items) {
-        // Update stock AND cost atomically
-        const updateResult = await tx.$queryRaw`
-          UPDATE "Product"
-          SET 
-            stock = stock + ${item.quantity},
-            cost = ${item.unitCost || 0}
-          WHERE id = ${item.productId}
-            AND "tenantId" = ${result.tenantId}
-          RETURNING id;
-        `;
-
-        if ((updateResult as any[]).length === 0) {
-          throw new StockError(
-            'PRODUCT_NOT_FOUND',
-            `Product ${item.productId} not found`,
-            item.productId
-          );
-        }
-
-        await recordInventoryTransaction({
-          productId: item.productId,
-          type: 'purchase',
-          quantity: item.quantity,
-          referenceId: result.id,
-          referenceType: 'PurchaseInvoice',
-          unitCost: item.unitCost || 0,
-          totalCost: item.total || 0,
-          tenantId: result.tenantId,
-        }, tx);
+        await applyPurchaseInflow(
+          tx,
+          result.tenantId,
+          {
+            productId: item.productId,
+            quantity: item.quantity,
+            unitCost: item.unitCost || 0,
+          },
+          'PurchaseInvoice',
+          result.id,
+        );
       }
     });
   }
@@ -305,29 +270,20 @@ export class InventoryAdapter {
   private static async handlePurchaseReturn(result: any): Promise<void> {
     if (!result.items || result.items.length === 0) return;
 
-    await prisma.$transaction(async (tx) => {
-      for (const item of result.items) {
-        await atomicDecrementStock(
-          item.productId,
-          item.quantity,
-          result.tenantId,
-          tx
-        );
-
-        await recordInventoryTransaction({
-          productId: item.productId,
-          type: 'purchase_return',
-          quantity: -item.quantity,
-          referenceId: result.id,
-          referenceType: 'PurchaseReturn',
-          unitCost: item.unitCost || 0,
-          totalCost: (item.unitCost || 0) * item.quantity,
-          tenantId: result.tenantId,
-        }, tx);
-      }
-    }, {
-      isolationLevel: 'Serializable',
-    });
+    await prisma.$transaction(
+      async tx => {
+        for (const item of result.items) {
+          await applySalesOutflow(
+            tx,
+            result.tenantId,
+            { productId: item.productId, quantity: item.quantity },
+            'PurchaseReturn',
+            result.id,
+          );
+        }
+      },
+      { isolationLevel: 'Serializable' },
+    );
   }
 
   /**

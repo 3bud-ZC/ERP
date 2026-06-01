@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -14,9 +15,12 @@ import { QuickAddPartyModal, type CreatedParty } from './QuickAddPartyModal';
 
 /* ─── Types ──────────────────────────────────────────────────────── */
 interface PartyOption  { id: string; nameAr: string; phone?: string | null; }
+interface CashboxOption { id: string; code: string; name: string; currentBalance: number; currency: string; }
 interface ProductOption {
   id: string; nameAr: string; code: string;
   price?: number; cost?: number; stock?: number;
+  warehouseId?: string | null;
+  warehouse?: { id: string; name?: string | null; nameAr?: string | null; code?: string | null } | null;
 }
 interface UserOption   { id: string; name?: string | null; email: string; }
 
@@ -82,10 +86,12 @@ export function InvoiceForm({
   mode?: 'create' | 'edit';
 }) {
   const router = useRouter();
+  const qc = useQueryClient();
   const [toast, showToast] = useToast();
 
   /* ── Reference data ── */
   const [parties,  setParties]  = useState<PartyOption[]>([]);
+  const [cashboxes, setCashboxes] = useState<CashboxOption[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [users,    setUsers]    = useState<UserOption[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
@@ -101,6 +107,8 @@ export function InvoiceForm({
   );
   const [status,        setStatus]        = useState(existing?.status ?? 'pending');
   const [paymentStatus, setPaymentStatus] = useState(existing?.paymentStatus ?? 'cash');
+  const [paidAmount, setPaidAmount] = useState(String(existing?.paidAmount ?? 0));
+  const [cashboxId, setCashboxId] = useState('');
   const [notes,         setNotes]         = useState(existing?.notes ?? '');
   const [repId,         setRepId]         = useState(
     (config.kind === 'sales' ? existing?.salesRepId : existing?.purchaseRepId) ?? '',
@@ -108,9 +116,10 @@ export function InvoiceForm({
   const [paymentTermsDays, setPaymentTermsDays] = useState(String(existing?.paymentTermsDays ?? 0));
   const [currency, setCurrency] = useState(existing?.currency ?? 'EGP');
   const [template, setTemplate] = useState(existing?.template ?? 'default');
+  const existingItems = Array.isArray(existing?.items) ? existing.items : [];
   const [lines, setLines] = useState<InvoiceLine[]>(
-    existing?.items?.length
-      ? existing.items.map(it => ({
+    existingItems.length
+      ? existingItems.map(it => ({
           productId:   it.productId,
           description: it.description ?? '',
           quantity:          String(it.quantity),
@@ -147,15 +156,37 @@ export function InvoiceForm({
   /* ── Load reference data ── */
   useEffect(() => {
     Promise.all([
-      fetch(config.partyApi, { credentials: 'include' }).then(r => r.json()),
-      fetch('/api/products',  { credentials: 'include' }).then(r => r.json()),
-      fetch('/api/users',     { credentials: 'include' }).then(r => r.json()).catch(() => ({ success: false })),
-    ]).then(([pj, prj, uj]) => {
+      fetch(config.partyApi, { credentials: 'include', cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/cashboxes?status=active', { credentials: 'include', cache: 'no-store' }).then(r => r.json()).catch(() => ({ success: false })),
+      fetch('/api/products',  { credentials: 'include', cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/users',     { credentials: 'include', cache: 'no-store' }).then(r => r.json()).catch(() => ({ success: false })),
+    ]).then(([pj, cj, prj, uj]) => {
       if (pj.success)  setParties(pj.data ?? []);
+      if (cj?.success) setCashboxes(cj.data ?? []);
       if (prj.success) setProducts(prj.data ?? []);
       if (uj?.success && Array.isArray(uj.data)) setUsers(uj.data);
     }).finally(() => setDataLoading(false));
   }, [config.partyApi]);
+
+  useEffect(() => {
+    if (cashboxId) return;
+    if (!Array.isArray(cashboxes) || cashboxes.length === 0) return;
+    const paidNow = Number(paidAmount || 0);
+    if (paymentStatus === 'cash' || paymentStatus === 'paid' || paidNow > 0) {
+      setCashboxId(cashboxes[0].id);
+    }
+  }, [cashboxes, cashboxId, paymentStatus, paidAmount]);
+
+  useEffect(() => {
+    if (paymentStatus === 'unpaid') {
+      setPaidAmount('0');
+    } else if (paymentStatus === 'cash' || paymentStatus === 'paid') {
+      // @ts-ignore
+      if (typeof grandTotal !== 'undefined') {
+        // Will be updated by the next render if grandTotal changes
+      }
+    }
+  }, [paymentStatus]);
 
   const totals = useMemo(() => {
     const validLines = lines.filter(l => l.productId && parseFloat(l.quantity) > 0);
@@ -180,6 +211,15 @@ export function InvoiceForm({
   const discountAmount = totals.headerDiscount + totals.lineDiscountTotal;
   const grandTotal = totals.grandTotal;
   const taxAmount = totals.tax;
+  const parsedPaidAmount = parseFloat(paidAmount) || 0;
+  const isAutoFullPayment = paymentStatus === 'cash' || paymentStatus === 'paid';
+  const effectivePaidAmount = paymentStatus === 'unpaid' ? 0 : (isAutoFullPayment ? grandTotal : parsedPaidAmount);
+
+  useEffect(() => {
+    if (isAutoFullPayment) {
+      setPaidAmount(String(grandTotal));
+    }
+  }, [isAutoFullPayment, grandTotal]);
 
   /* ── Line helpers ── */
   const setLine = useCallback((i: number, field: keyof InvoiceLine, val: string) => {
@@ -212,6 +252,10 @@ export function InvoiceForm({
     if (lines.some(l => l.productId && !(parseFloat(l.quantity) > 0))) {
       return 'الكمية يجب أن تكون أكبر من صفر';
     }
+    const paid = effectivePaidAmount;
+    if (paid < 0) return 'المبلغ المدفوع لا يمكن أن يكون أقل من صفر';
+    if (paid > grandTotal + 0.01) return 'المبلغ المدفوع لا يمكن أن يتجاوز إجمالي الفاتورة';
+    if (paid > 0 && !cashboxId) return 'يجب اختيار الخزنة عند تسجيل مبلغ مدفوع';
     // Force-save policy: a zero-total invoice is allowed (e.g. promo / sample),
     // and stock-availability is now a warning surfaced inline in the table
     // rather than a blocker — see the lowStock highlight on each line.
@@ -245,11 +289,12 @@ export function InvoiceForm({
       issueDate: issueDate || undefined,
       status: finalStatus,
       paymentStatus,
+      paidAmount: effectivePaidAmount,
+      cashboxId: cashboxId || undefined,
       [config.repIdField]: repId || undefined,
       paymentTermsDays: parseInt(paymentTermsDays, 10) || 0,
       currency: currency || 'EGP',
       template: template || 'default',
-      ...(invoiceNumber.trim() && { invoiceNumber: invoiceNumber.trim() }),
       notes: notes.trim() || undefined,
       total:      subtotal,
       grandTotal,
@@ -275,6 +320,7 @@ export function InvoiceForm({
           total:           computed.total,
           discountPercent: computed.discountPercent,
           taxRate:         computed.taxRate,
+          warehouseId:     products.find(p => p.id === computed.productId)?.warehouseId ?? undefined,
         };
       }),
     };
@@ -292,6 +338,16 @@ export function InvoiceForm({
       const j = await res.json();
 
       if (j.success) {
+        // Invalidate key lists so the UI updates immediately after navigation.
+        qc.invalidateQueries({ queryKey: ['dashboard'], exact: false });
+        qc.invalidateQueries({ queryKey: ['payments'], exact: false });
+        qc.invalidateQueries({ queryKey: ['cashboxes'], exact: false });
+        qc.invalidateQueries({ queryKey: ['accounting'], exact: false });
+        qc.invalidateQueries({ queryKey: ['reports'], exact: false });
+        qc.invalidateQueries({ queryKey: ['sales-invoices'], exact: false });
+        qc.invalidateQueries({ queryKey: ['purchase-invoices'], exact: false });
+        qc.invalidateQueries({ queryKey: [config.kind, 'invoices', 'list'] });
+        router.refresh();
         const newId = j.data?.id ?? j.data?.invoice?.id ?? existing?.id;
         if (submitMode === 'draft') {
           showToast('تم حفظ المسودة', 'success');
@@ -300,7 +356,7 @@ export function InvoiceForm({
           showToast('تم حفظ الفاتورة بنجاح', 'success');
           // Reset for a new invoice
           setPartyId(''); setInvoiceNumber(''); setNotes('');
-          setLines([emptyLine()]); setStatus('pending'); setPaymentStatus('cash');
+          setLines([emptyLine()]); setStatus('pending'); setPaymentStatus('cash'); setPaidAmount('0'); setCashboxId('');
           setInvoiceDate(new Date().toISOString().slice(0, 10));
           setIssueDate(new Date().toISOString().slice(0, 10));
           setRepId(''); setPaymentTermsDays('0'); setDiscountPercent('0');
@@ -313,7 +369,11 @@ export function InvoiceForm({
           setTimeout(() => router.push(`/invoices/${config.routeBase}`), 800);
         }
       } else {
-        setFormError(translateError(j.message || j.error || 'فشل الحفظ'));
+        const details = Array.isArray(j?.details?.details) ? j.details.details : Array.isArray(j?.details) ? j.details : [];
+        const detailLine = details[0]
+          ? ` — ${details[0].productName || 'صنف'} (المطلوب: ${details[0].requested ?? 0} / المتاح: ${details[0].available ?? 0})`
+          : '';
+        setFormError(`${translateError(j.message || j.error || 'فشل الحفظ')}${detailLine}`);
       }
     } catch {
       setFormError('تعذر الاتصال بالخادم');
@@ -324,7 +384,7 @@ export function InvoiceForm({
   // state we already list below — explicitly suppress the missing-dep lint.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    saveMode, partyId, invoiceDate, issueDate, status, paymentStatus, repId,
+    saveMode, partyId, invoiceDate, issueDate, status, paymentStatus, paidAmount, cashboxId, repId,
     paymentTermsDays, currency, template, invoiceNumber, notes, subtotal,
     grandTotal, discountAmount, discountPercent, taxAmount, headerTaxRate, extraCharges,
     freightAmount, lines, config, mode, existing, totals,
@@ -388,7 +448,7 @@ export function InvoiceForm({
                 </select>
                 <button type="button" onClick={() => setShowAddParty(true)}
                   title={config.addPartyLabel}
-                  className="flex items-center gap-1 px-3 py-2 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors flex-shrink-0">
+                  className="flex items-center gap-1 px-3 py-2 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-lg border border-emerald-200 transition-colors flex-shrink-0">
                   <UserPlus className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">{config.addPartyLabel}</span>
                 </button>
@@ -401,8 +461,17 @@ export function InvoiceForm({
             </div>
             <div>
               <Label>رقم الفاتورة</Label>
-              <input value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)}
-                placeholder={`${config.numberPrefix}-… (اختياري)`} className={inputCls} />
+              {mode === 'edit' && invoiceNumber ? (
+                <input value={invoiceNumber} readOnly disabled className={inputCls} />
+              ) : (
+                <input
+                  value=""
+                  readOnly
+                  disabled
+                  placeholder="يُولَّد تلقائياً عند الحفظ"
+                  className={inputCls}
+                />
+              )}
             </div>
             <div>
               <Label>الحالة</Label>
@@ -422,6 +491,30 @@ export function InvoiceForm({
                 <option value="paid">مدفوعة</option>
                 <option value="credit">آجل</option>
               </select>
+            </div>
+            <div>
+              <Label>المبلغ المدفوع</Label>
+              <input type="number" min="0" step="0.01" value={paidAmount}
+                onChange={e => setPaidAmount(e.target.value)}
+                readOnly={paymentStatus === 'unpaid' || paymentStatus === 'cash' || paymentStatus === 'paid'}
+                disabled={paymentStatus === 'unpaid' || paymentStatus === 'cash' || paymentStatus === 'paid'}
+                placeholder="0" className={`${inputCls} ${(paymentStatus === 'unpaid' || paymentStatus === 'cash' || paymentStatus === 'paid') ? 'bg-slate-50 text-slate-500' : ''}`} />
+            </div>
+            <div>
+              <Label>الخزنة</Label>
+              <select value={cashboxId} onChange={e => setCashboxId(e.target.value)} className={inputCls}>
+                <option value="">— اختر الخزنة عند الدفع —</option>
+                {cashboxes.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.code}) - {fmtMoney(c.currentBalance)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <Label>المتبقي</Label>
+              <input readOnly value={fmtMoney(Math.max(0, grandTotal - effectivePaidAmount))}
+                className={`${inputCls} bg-slate-50 text-slate-700`} />
             </div>
             <div>
               <Label>تاريخ الإصدار</Label>
@@ -466,15 +559,15 @@ export function InvoiceForm({
           <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-2">
             <h2 className="text-sm font-semibold text-slate-700">البنود</h2>
             <button type="button" onClick={addLine}
-              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium border border-blue-200 rounded-lg px-2.5 py-1 hover:bg-blue-50">
+              className="flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-800 font-medium border border-emerald-200 rounded-lg px-2.5 py-1 hover:bg-emerald-50">
               <Plus className="w-3.5 h-3.5" /> إضافة صنف
             </button>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[820px]">
+            <table className="w-full text-sm min-w-[920px]">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[32%]">المنتج</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[34%]">المنتج / المستودع</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[22%]">البيان</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[12%]">الكمية</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500 w-[10%]">السعر</th>
@@ -491,12 +584,13 @@ export function InvoiceForm({
                   const computedLine = totals.lines[lineIdx];
                   const net = computedLine?.total ?? computeLineNet(line).net;
                   const prod = products.find(p => p.id === line.productId);
+                  const warehouseName = prod?.warehouse?.nameAr || prod?.warehouse?.name || prod?.warehouse?.code || 'بدون مستودع';
                   const lowStock = config.kind === 'sales' && prod && prod.stock != null && qty > prod.stock;
                   return (
                     <tr key={i} className={lowStock ? 'bg-red-50' : ''}>
                       <td className="px-2 py-1.5">
                         <select value={line.productId} onChange={e => setLine(i, 'productId', e.target.value)}
-                          className={`w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white ${lowStock ? 'border-red-300' : 'border-slate-200'}`}>
+                          className={`w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white ${lowStock ? 'border-red-300' : 'border-slate-200'}`}>
                           <option value="">— اختر المنتج —</option>
                           {products.map(p => (
                             <option key={p.id} value={p.id}>
@@ -504,20 +598,26 @@ export function InvoiceForm({
                             </option>
                           ))}
                         </select>
+                        {prod && (
+                          <div className={`mt-1 flex items-center justify-between gap-2 text-[11px] ${lowStock ? 'text-red-700' : 'text-slate-500'}`}>
+                            <span>المستودع: {warehouseName}</span>
+                            <span className="tabular-nums">الرصيد: {(prod.stock ?? 0).toLocaleString('ar-EG')}</span>
+                          </div>
+                        )}
                       </td>
                       <td className="px-2 py-1.5">
                         <input value={line.description} onChange={e => setLine(i, 'description', e.target.value)}
-                          placeholder="ملاحظة" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                          placeholder="ملاحظة" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500" />
                       </td>
                       <td className="px-2 py-1.5">
                         <input type="number" min="0" step="0.01" value={line.quantity}
                           onChange={e => setLine(i, 'quantity', e.target.value)}
-                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-emerald-500" />
                       </td>
                       <td className="px-2 py-1.5">
                         <input type="number" min="0" step="0.01" value={line.price}
                           onChange={e => setLine(i, 'price', e.target.value)}
-                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-emerald-500" />
                       </td>
                       <td className="px-2 py-1.5">
                         <input type="number" min="0" max="100" step="0.01" value={line.discountPercent}
@@ -553,7 +653,7 @@ export function InvoiceForm({
             <Label>ملاحظات</Label>
             <textarea value={notes} onChange={e => setNotes(e.target.value)}
               placeholder="أي ملاحظات إضافية على الفاتورة…" rows={4}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none" />
           </div>
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
             <h3 className="text-sm font-semibold text-slate-700 mb-3 border-b border-slate-100 pb-2">
@@ -575,7 +675,7 @@ export function InvoiceForm({
                     value={discountPercent}
                     onChange={e => setDiscountPercent(e.target.value)}
                     placeholder="0"
-                    className="w-20 border border-slate-300 rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+                    className="w-20 border border-slate-300 rounded-lg px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-emerald-500 tabular-nums"
                   />
                   <span className="text-xs text-slate-400">%</span>
                 </label>
@@ -609,6 +709,8 @@ export function InvoiceForm({
                 </div>
               )}
               <Row label="الإجمالي" value={fmtMoney(grandTotal)} bold />
+              <Row label="المدفوع الآن" value={fmtMoney(effectivePaidAmount)} />
+              <Row label="المتبقي بعد الحفظ" value={fmtMoney(Math.max(0, grandTotal - effectivePaidAmount))} />
               {mode === 'edit' && existing && (
                 <Row label="المتبقي" value={fmtMoney(Math.max(0, grandTotal - (existing.paidAmount ?? 0)))} />
               )}
@@ -636,13 +738,13 @@ export function InvoiceForm({
           {mode === 'create' && (
             <button type="button" disabled={saving}
               onClick={e => handleSubmit(e as React.FormEvent, 'print')}
-              className="px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2">
+              className="px-4 py-2.5 bg-slate-950 text-white rounded-lg text-sm font-medium hover:bg-slate-900 disabled:opacity-50 flex items-center gap-2">
               {saving && saveMode === 'print' ? <Spinner /> : (<><Printer className="w-4 h-4" /> حفظ وطباعة</>)}
             </button>
           )}
           <button type="submit" disabled={saving}
             onClick={() => setSaveMode('confirm')}
-            className="px-6 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+            className="px-6 py-2.5 bg-slate-950 text-white rounded-lg text-sm font-semibold hover:bg-slate-900 disabled:opacity-50 flex items-center gap-2">
             {saving && saveMode === 'confirm' ? <Spinner /> : (<><CheckCircle className="w-4 h-4" /> {mode === 'edit' ? 'حفظ التغييرات' : 'حفظ وإغلاق'}</>)}
           </button>
           <Link href={`/invoices/${config.routeBase}`}
@@ -656,7 +758,7 @@ export function InvoiceForm({
 }
 
 /* ─── Helpers ─── */
-const inputCls = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white';
+const inputCls = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white';
 
 function Label({ children }: { children: React.ReactNode }) {
   return <label className="block text-sm font-medium text-slate-700 mb-1">{children}</label>;
@@ -680,6 +782,10 @@ function translateError(raw: string): string {
   if (r.includes('p2003') || r.includes('foreign key')) return 'هذا العنصر مرتبط ببيانات أخرى';
   if (r.includes('p2002') || r.includes('unique')) return 'رقم الفاتورة مستخدم بالفعل';
   if (r.includes('stock') || r.includes('insufficient')) return 'رصيد المخزون غير كافٍ';
+  if (r.includes('allocation') || r.includes('توزيعات')) return 'توزيع الدفعة غير صحيح بالنسبة للفاتورة';
+  if (r.includes('cashbox') || r.includes('الخزنة')) return 'يجب اختيار خزنة صحيحة عند الدفع';
+  if (r.includes('must have at least one item') || r.includes('at least one item')) return 'يجب إضافة صنف واحد على الأقل';
+  if (r.includes('paid amount') || r.includes('المدفوع')) return 'المبلغ المدفوع غير صحيح';
   if (r.includes('connect') || r.includes('fetch')) return 'تعذر الاتصال بالخادم';
   return raw;
 }

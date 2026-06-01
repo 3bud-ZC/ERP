@@ -2,10 +2,13 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Users } from 'lucide-react';
 import { useToast, Toast } from '@/components/ui/patterns';
 import { Field, Section, FieldGrid } from '@/components/ui/modal';
 import { EntityFormPage } from '@/components/forms/EntityFormPage';
+import { AutoCodeField } from '@/components/forms/AutoCodeField';
+import { queryKeys } from '@/lib/api/query-keys';
 
 export interface CustomerExisting {
   id:           string;
@@ -17,7 +20,7 @@ export interface CustomerExisting {
   creditLimit?: number | null;
 }
 
-const empty = { code: '', nameAr: '', nameEn: '', email: '', phone: '', creditLimit: '' };
+const empty = { nameAr: '', nameEn: '', email: '', phone: '', creditLimit: '' };
 
 /**
  * Full-page customer create / edit form.
@@ -32,13 +35,13 @@ export function CustomerForm({
   mode:      'create' | 'edit';
   existing?: CustomerExisting;
 }) {
+  const qc = useQueryClient();
   const router = useRouter();
   const [toast, showToast] = useToast();
 
   const [form, setForm] = useState(() =>
     existing
       ? {
-          code:        existing.code,
           nameAr:      existing.nameAr,
           nameEn:      existing.nameEn ?? '',
           email:       existing.email ?? '',
@@ -54,7 +57,6 @@ export function CustomerForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!form.code.trim())   return setError('الرمز مطلوب');
     if (!form.nameAr.trim()) return setError('الاسم بالعربية مطلوب');
 
     setSaving(true);
@@ -62,7 +64,6 @@ export function CustomerForm({
       const payload =
         mode === 'create'
           ? {
-              code:        form.code.trim(),
               nameAr:      form.nameAr.trim(),
               ...(form.nameEn   && { nameEn:   form.nameEn.trim() }),
               ...(form.email    && { email:    form.email.trim() }),
@@ -71,7 +72,6 @@ export function CustomerForm({
             }
           : {
               id:          existing!.id,
-              code:        form.code.trim(),
               nameAr:      form.nameAr.trim(),
               nameEn:      form.nameEn.trim() || null,
               email:       form.email.trim()  || null,
@@ -88,6 +88,7 @@ export function CustomerForm({
       const j = await res.json();
 
       if (j.success) {
+        qc.invalidateQueries({ queryKey: queryKeys.customers });
         showToast(mode === 'create' ? 'تم إضافة العميل بنجاح' : 'تم تحديث بيانات العميل', 'success');
         // Small delay so the toast is visible before navigation.
         setTimeout(() => router.push('/customers'), 600);
@@ -120,15 +121,9 @@ export function CustomerForm({
         primaryLabel={mode === 'create' ? 'حفظ العميل' : 'حفظ التعديلات'}
       >
         <form id="customer-form" onSubmit={handleSubmit} className="space-y-5">
-          <Section title="البيانات الأساسية" subtitle="الرمز والاسم وحد الائتمان">
+          <Section title="البيانات الأساسية" subtitle="الاسم وحد الائتمان">
             <FieldGrid>
-              <Field
-                label="الرمز"
-                required
-                value={form.code}
-                placeholder="CUS-001"
-                onChange={e => setForm(f => ({ ...f, code: e.target.value }))}
-              />
+              <AutoCodeField mode={mode} value={existing?.code} />
               <Field
                 label="حد الائتمان (ج.م)"
                 type="number"

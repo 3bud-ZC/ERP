@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import {
   ReportShell, ReportLabel, reportInputCls, fmtMoneyEGP, ReportSummaryCard,
@@ -36,7 +36,7 @@ export default function SalesReportPage() {
 
   const customersQ = useQuery({
     queryKey: ['customers'],
-    queryFn:  () => apiGet<CustomerLite[]>('/api/customers'),
+    queryFn:  () => apiGetList<CustomerLite>('/api/customers'),
     staleTime: 60_000,
   });
   const customers = useMemo(() => customersQ.data ?? [], [customersQ.data]);
@@ -88,6 +88,7 @@ export default function SalesReportPage() {
         title="تقرير المبيعات"
         subtitle="فواتير المبيعات والإجماليات"
         periodLabel={periodLabel}
+        exportConfig={{ report: 'sales', params: { fromDate: from, toDate: to, customerId } }}
         loading={reportQ.isLoading}
         error={reportQ.error ? (reportQ.error as Error).message : null}
         filters={
@@ -113,7 +114,7 @@ export default function SalesReportPage() {
         {/* Summary KPIs */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <ReportSummaryCard label="عدد الفواتير"   value={data.totalInvoices ?? invoices.length} />
-          <ReportSummaryCard label="إجمالي المبيعات" value={fmtMoneyEGP(totalSales)} accent="bg-blue-50 border-blue-200" />
+          <ReportSummaryCard label="إجمالي المبيعات" value={fmtMoneyEGP(totalSales)} accent="bg-emerald-50 border-emerald-200" />
           <ReportSummaryCard label="متوسط الفاتورة" value={fmtMoneyEGP(averageInv)} />
           <ReportSummaryCard label="المسدّد"         value={fmtMoneyEGP(totalPaid)} accent="bg-emerald-50 border-emerald-200" />
           <ReportSummaryCard label="المتبقي"          value={fmtMoneyEGP(totalUnpaid)} accent="bg-amber-50 border-amber-200" />

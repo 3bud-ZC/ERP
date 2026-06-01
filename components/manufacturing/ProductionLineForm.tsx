@@ -51,7 +51,6 @@ export function ProductionLineForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!form.code.trim()) return setError('الرمز مطلوب');
     if (!form.name.trim()) return setError('الاسم مطلوب');
 
     setSaving(true);
@@ -103,7 +102,7 @@ export function ProductionLineForm({
         <form id="line-form" onSubmit={handleSubmit} className="space-y-5">
           <Section title="البيانات الأساسية" subtitle="الرمز والاسم والطاقة الإنتاجية">
             <FieldGrid>
-              <Field label="الرمز" required value={form.code} placeholder="LINE-001"
+              <Field label="الرمز" value={form.code} placeholder="يُولَّد تلقائياً مثل PL-2026-00001"
                 onChange={e => setForm(f => ({ ...f, code: e.target.value }))} />
               <Field label="الاسم" required value={form.name} placeholder="خط الإنتاج الرئيسي"
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />

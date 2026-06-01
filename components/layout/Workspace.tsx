@@ -14,7 +14,7 @@ export function Workspace({ children }: WorkspaceProps) {
   const pathname = usePathname();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-slate-100" dir="rtl">
+    <div className="min-h-screen og-shell og-silk font-jakarta" dir="rtl">
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -22,11 +22,11 @@ export function Workspace({ children }: WorkspaceProps) {
       {/* RTL: sidebar is on the right, so content gets margin-right */}
       <div
         className={`transition-all duration-300 ${
-          sidebarCollapsed ? 'mr-16' : 'mr-64'
+          sidebarCollapsed ? 'mr-0 lg:mr-16' : 'mr-0 lg:mr-64'
         }`}
       >
         <Topbar />
-        <main className="p-6">{/* page content */}
+        <main className="p-4 sm:p-6 lg:p-7">{/* page content */}
           {/* key re-mounts this div on every route change → triggers fade-in */}
           <div key={pathname} style={{ animation: 'erpPageIn 0.16s ease-out both' }}>
             {children}

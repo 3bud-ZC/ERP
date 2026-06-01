@@ -24,17 +24,10 @@ import {
   buildSalesReturnJournalLines,
   postJournalLinesInTransaction,
 } from '@/lib/services/invoice-accounting.service';
+import { createPaymentInTx } from '@/lib/services/payment-execution.service';
 
-export class InvoiceExecutionError extends Error {
-  constructor(
-    public code: 'INVOICE_FAILED' | 'INVENTORY_FAILED' | 'ACCOUNTING_FAILED' | 'VALIDATION_FAILED',
-    message: string,
-    public cause?: Error,
-  ) {
-    super(message);
-    this.name = 'InvoiceExecutionError';
-  }
-}
+import { InvoiceExecutionError } from '@/lib/services/execution-errors';
+export { InvoiceExecutionError };
 
 export type ExecutionInvoiceItem = InvoiceLineInput;
 
@@ -46,6 +39,7 @@ export interface SalesInvoiceExecutionInput {
   status?: string;
   paymentStatus?: string;
   paidAmount?: number;
+  cashboxId?: string;
   paymentTermsDays?: number;
   issueDate?: Date;
   salesRepId?: string;
@@ -68,6 +62,7 @@ export interface PurchaseInvoiceExecutionInput {
   status?: string;
   paymentStatus?: string;
   paidAmount?: number;
+  cashboxId?: string;
   paymentTermsDays?: number;
   issueDate?: Date;
   purchaseRepId?: string;
@@ -136,7 +131,7 @@ export async function executeCreateSalesInvoice(params: {
 }) {
   const { invoiceData, items, tenantId, userId } = params;
   if (!items?.length) {
-    throw new InvoiceExecutionError('VALIDATION_FAILED', 'Invoice must have at least one item');
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'يجب أن تحتوي الفاتورة على صنف واحد على الأقل');
   }
 
   const totals = computeInvoiceTotals(
@@ -150,11 +145,26 @@ export async function executeCreateSalesInvoice(params: {
     }),
   );
 
+  const requestedPaidAmount = Number(invoiceData.paidAmount || 0);
+  if (requestedPaidAmount < 0) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'المبلغ المدفوع لا يمكن أن يكون أقل من صفر');
+  }
+  if (requestedPaidAmount > totals.grandTotal + 0.01) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'المبلغ المدفوع لا يمكن أن يتجاوز إجمالي الفاتورة');
+  }
+  if (requestedPaidAmount > 0 && !invoiceData.cashboxId) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'يجب اختيار الخزنة عند تسجيل مبلغ مدفوع');
+  }
+
   const payment = resolveInitialPayment({
     paymentStatus: invoiceData.paymentStatus,
     grandTotal: totals.grandTotal,
-    paidAmount: invoiceData.paidAmount,
+    paidAmount: requestedPaidAmount,
   });
+  const effectivePaidAmount = payment.paidAmount;
+  if (effectivePaidAmount > 0 && !invoiceData.cashboxId) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'يجب اختيار الخزنة عند تسجيل مبلغ مدفوع');
+  }
 
   const postInventory = !isDraftStatus(invoiceData.status);
   const profile = await getPostingProfile(tenantId);
@@ -177,7 +187,9 @@ export async function executeCreateSalesInvoice(params: {
           notes: invoiceData.notes,
           status: invoiceData.status || 'posted',
           paymentStatus: payment.paymentStatus,
-          paidAmount: payment.paidAmount,
+          // Keep invoice paidAmount at zero before creating the atomic payment,
+          // then allocations update it once the payment is posted.
+          paidAmount: effectivePaidAmount > 0 ? 0 : effectivePaidAmount,
           total: totals.subtotal,
           discount: totals.headerDiscount + totals.lineDiscountTotal,
           tax: totals.tax,
@@ -236,7 +248,28 @@ export async function executeCreateSalesInvoice(params: {
         });
       }
 
-      return { invoice, journalEntry, totals, totalCogs, itemsProcessed: items.length };
+      let paymentResult: Awaited<ReturnType<typeof createPaymentInTx>> | null = null;
+      let finalInvoice = invoice;
+      if (effectivePaidAmount > 0) {
+        paymentResult = await createPaymentInTx(tx, {
+          tenantId,
+          userId,
+          amount: effectivePaidAmount,
+          date: invoiceData.date,
+          type: 'incoming',
+          customerId: invoiceData.customerId,
+          salesInvoiceId: invoice.id,
+          cashboxId: invoiceData.cashboxId!,
+          notes: `تحصيل مباشر من فاتورة ${invoice.invoiceNumber}`,
+          allocations: [{ invoiceId: invoice.id, invoiceType: 'sales', amount: effectivePaidAmount }],
+        });
+        finalInvoice = await tx.salesInvoice.findUniqueOrThrow({
+          where: { id: invoice.id },
+          include: { items: true, customer: true, payments: true },
+        });
+      }
+
+      return { invoice: finalInvoice, journalEntry, payment: paymentResult?.payment ?? null, totals, totalCogs, itemsProcessed: items.length };
     },
     { isolationLevel: 'Serializable', maxWait: 15000, timeout: 30000 },
   );
@@ -250,7 +283,7 @@ export async function executeCreatePurchaseInvoice(params: {
 }) {
   const { invoiceData, items, tenantId, userId } = params;
   if (!items?.length) {
-    throw new InvoiceExecutionError('VALIDATION_FAILED', 'Invoice must have at least one item');
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'يجب أن تحتوي الفاتورة على صنف واحد على الأقل');
   }
 
   let totals = computeInvoiceTotals(
@@ -272,11 +305,26 @@ export async function executeCreatePurchaseInvoice(params: {
     };
   }
 
+  const requestedPaidAmount = Number(invoiceData.paidAmount || 0);
+  if (requestedPaidAmount < 0) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'المبلغ المدفوع لا يمكن أن يكون أقل من صفر');
+  }
+  if (requestedPaidAmount > totals.grandTotal + 0.01) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'المبلغ المدفوع لا يمكن أن يتجاوز إجمالي الفاتورة');
+  }
+  if (requestedPaidAmount > 0 && !invoiceData.cashboxId) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'يجب اختيار الخزنة عند تسجيل مبلغ مدفوع');
+  }
+
   const payment = resolveInitialPayment({
     paymentStatus: invoiceData.paymentStatus,
     grandTotal: totals.grandTotal,
-    paidAmount: invoiceData.paidAmount,
+    paidAmount: requestedPaidAmount,
   });
+  const effectivePaidAmount = payment.paidAmount;
+  if (effectivePaidAmount > 0 && !invoiceData.cashboxId) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'يجب اختيار الخزنة عند تسجيل مبلغ مدفوع');
+  }
 
   const postInventory = !isDraftStatus(invoiceData.status);
   const inventoryValue = totals.netSubtotal + totals.freightAmount;
@@ -299,7 +347,9 @@ export async function executeCreatePurchaseInvoice(params: {
           notes: invoiceData.notes,
           status: invoiceData.status || 'posted',
           paymentStatus: payment.paymentStatus,
-          paidAmount: payment.paidAmount,
+          // Keep invoice paidAmount at zero before creating the atomic payment,
+          // then allocations update it once the payment is posted.
+          paidAmount: effectivePaidAmount > 0 ? 0 : effectivePaidAmount,
           total: totals.subtotal,
           discount: totals.headerDiscount + totals.lineDiscountTotal,
           tax: totals.tax,
@@ -356,7 +406,28 @@ export async function executeCreatePurchaseInvoice(params: {
         });
       }
 
-      return { invoice, journalEntry, totals, itemsProcessed: items.length };
+      let paymentResult: Awaited<ReturnType<typeof createPaymentInTx>> | null = null;
+      let finalInvoice = invoice;
+      if (effectivePaidAmount > 0) {
+        paymentResult = await createPaymentInTx(tx, {
+          tenantId,
+          userId,
+          amount: effectivePaidAmount,
+          date: invoiceData.date,
+          type: 'outgoing',
+          supplierId: invoiceData.supplierId,
+          purchaseInvoiceId: invoice.id,
+          cashboxId: invoiceData.cashboxId!,
+          notes: `سداد مباشر من فاتورة ${invoice.invoiceNumber}`,
+          allocations: [{ invoiceId: invoice.id, invoiceType: 'purchase', amount: effectivePaidAmount }],
+        });
+        finalInvoice = await tx.purchaseInvoice.findUniqueOrThrow({
+          where: { id: invoice.id },
+          include: { items: true, supplier: true, payments: true },
+        });
+      }
+
+      return { invoice: finalInvoice, journalEntry, payment: paymentResult?.payment ?? null, totals, itemsProcessed: items.length };
     },
     { isolationLevel: 'Serializable', maxWait: 15000, timeout: 30000 },
   );
@@ -369,6 +440,7 @@ export {
   executeCancelPurchaseInvoice,
   executeDeleteSalesInvoice,
   executeDeletePurchaseInvoice,
+  executeDeleteInvoice,
   executeApproveSalesReturnCanonical as executeApproveSalesReturn,
   executeApprovePurchaseReturnCanonical as executeApprovePurchaseReturn,
 } from '@/lib/services/invoice-execution-mutations';
@@ -391,7 +463,7 @@ export function mapExecutionError(error: unknown): {
   }
   return {
     status: 500,
-    body: { error: 'Transaction failed', code: 'TRANSACTION_FAILED' },
+    body: { error: 'فشلت العملية، حاول مرة أخرى', code: 'TRANSACTION_FAILED' },
   };
 }
 

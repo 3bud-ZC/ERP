@@ -6,7 +6,7 @@ export const revalidate = 0;
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { validateProductType } from '@/lib/validation';
-import { productCodeEntityKey, resolveEntityCode } from '@/lib/code-sequence.service';
+import { productCodeEntityKey, allocateEntityCode } from '@/lib/code-sequence.service';
 import { logActivity } from '@/lib/activity-log';
 
 // GET - Read products (finished products only)
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
     const body = await request.json();
 
     // Validate required fields and field types
-    const { code, nameAr, nameEn, type, unitId, price, cost, stock, minStock, warehouseId, itemGroupId, companyId } = body;
+    const { code: _ignoredCode, nameAr, nameEn, type, unitId, price, cost, stock, minStock, warehouseId, itemGroupId, companyId } = body;
     if (!nameAr || typeof nameAr !== 'string' || !nameAr.trim()) {
       return apiError('اسم المنتج بالعربية مطلوب', 400);
     }
@@ -70,15 +70,34 @@ export async function POST(request: Request) {
       return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
+    const tenant = await (await import('@/lib/db')).prisma.tenant.findUnique({
+      where: { id: user.tenantId },
+      include: { _count: { select: { products: true } } },
+    });
+    if (!tenant || tenant.status !== 'active') {
+      return apiError('حساب الشركة غير نشط', 403);
+    }
+    if (tenant._count.products >= tenant.maxProducts) {
+      return apiError(`تم الوصول للحد الأقصى للمنتجات في خطة العميل (${tenant.maxProducts})`, 409);
+    }
+
     const productType =
       type && typeof type === 'string' && validateProductType(type)
         ? String(type)
         : 'finished_product';
-    const resolvedCode = await resolveEntityCode(
-      typeof code === 'string' ? code : '',
+    const resolvedCode = await allocateEntityCode(
       productCodeEntityKey(productType),
       user.tenantId,
     );
+
+    const { prisma } = await import('@/lib/db');
+    if (warehouseId) {
+      const warehouse = await prisma.warehouse.findFirst({
+        where: { id: String(warehouseId), tenantId: user.tenantId, isActive: true },
+        select: { id: true },
+      });
+      if (!warehouse) return apiError('المخزن غير موجود أو لا يتبع هذا العميل', 400);
+    }
 
     // Whitelist allowed fields — prevent injection of unexpected Prisma fields
     const productData: any = {
@@ -102,6 +121,12 @@ export async function POST(request: Request) {
 
     const openingStock = Number(stock) || 0;
     const openingCost = Number(cost) ?? 0;
+    if (openingStock > 0 && warehouseId && user.tenantId) {
+      const { upsertWarehouseStockDelta } = await import('@/lib/services/warehouse-stock.service');
+      await prisma.$transaction(tx =>
+        upsertWarehouseStockDelta(tx, user.tenantId!, product.id, String(warehouseId), openingStock),
+      );
+    }
     if (openingStock > 0 && user.tenantId) {
       const { recordStockInflow } = await import('@/lib/inventory-costing');
       await recordStockInflow(
@@ -154,7 +179,7 @@ export async function PUT(request: Request) {
     }
 
     const body = await request.json();
-    const { id, stock, ...data } = body;
+    const { id, stock, code: _ignoredCode, ...data } = body;
 
     // SECURITY: Prevent direct stock manipulation via generic product endpoint
     // Stock must only be modified through inventory operations (invoices, adjustments, etc.)
@@ -167,6 +192,9 @@ export async function PUT(request: Request) {
 
     // Fetch existing product for activity logging
     const existingProduct = await productRepo.findById(id);
+    if (!existingProduct || existingProduct.tenantId !== user.tenantId) {
+      return apiError('المنتج غير موجود', 404);
+    }
 
     const product = await productRepo.update(id, data);
 
@@ -218,12 +246,14 @@ export async function DELETE(request: Request) {
     }
 
     // Check if product is used in any sales orders, purchase orders, invoices, or production
+    const existingProduct = await productRepo.findById(id);
+    if (!existingProduct || existingProduct.tenantId !== user.tenantId) {
+      return apiError('المنتج غير موجود', 404);
+    }
+
     const usage = await productRepo.countUsage(id);
     const { salesOrderItems, purchaseOrderItems, salesInvoiceItems, purchaseInvoiceItems, inventoryTransactions, productionOrders } = usage;
     const totalUsage = usage.total;
-
-    // Fetch existing product for activity logging
-    const existingProduct = await productRepo.findById(id);
 
     // Smart delete: if the product is referenced anywhere we keep the row
     // (so historical invoices / orders stay intact) and just mark it inactive.
@@ -280,4 +310,3 @@ export async function DELETE(request: Request) {
     return handleApiError(error, 'Delete product');
   }
 }
-

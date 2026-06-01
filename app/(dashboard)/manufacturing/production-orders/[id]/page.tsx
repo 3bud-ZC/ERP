@@ -6,7 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowRight, ClipboardList, Layers, Factory, CheckCircle, XCircle, PlayCircle, AlertCircle,
 } from 'lucide-react';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { Toast, useToast, ErrorBanner } from '@/components/ui/patterns';
 import { Section } from '@/components/ui/modal';
 
@@ -15,7 +15,7 @@ interface OrderItem {
   productId: string;
   quantity: number;
   cost?: number;
-  product?: { nameAr?: string; code?: string; unit?: string; stock?: number };
+  product?: { nameAr?: string; code?: string; unit?: string; stock?: number; cost?: number };
 }
 
 interface ProductionOrder {
@@ -43,8 +43,8 @@ interface ProductionOrder {
 
 const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   pending:     { label: 'معلّق',         cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-  approved:    { label: 'معتمد',          cls: 'bg-purple-50 text-purple-700 border-purple-200' },
-  in_progress: { label: 'قيد التنفيذ',  cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+  approved:    { label: 'معتمد',          cls: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+  in_progress: { label: 'قيد التنفيذ',  cls: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
   waiting:     { label: 'في الانتظار',  cls: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
   completed:   { label: 'مكتمل',         cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   cancelled:   { label: 'ملغى',           cls: 'bg-slate-100 text-slate-500 border-slate-200' },
@@ -64,11 +64,12 @@ export default function ProductionOrderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [marginPercent, setMarginPercent] = useState('25');
 
   function load() {
     setLoading(true);
     setError(null);
-    apiGet<ProductionOrder[]>('/api/production-orders')
+    apiGetList<ProductionOrder>('/api/production-orders')
       .then(list => {
         const found = list.find(o => o.id === id) ?? null;
         if (!found) setError('أمر الإنتاج غير موجود');
@@ -112,9 +113,22 @@ export default function ProductionOrderDetailPage() {
   }
 
   const status = STATUS_LABEL[order.status] ?? STATUS_LABEL.pending;
+  // Dynamic fallback for raw material cost if it was saved as 0 (e.g., when pending)
+  // NOTE: Product.cost is guaranteed to be synchronized with the canonical InventoryValuation/WAC engine
+  // via the syncProductCostFromValuation bridge in the backend. Thus, it accurately represents WAC.
+  const fallbackRawMaterialCost = order.items?.reduce((sum, it) => sum + (it.quantity * (it.product?.cost ?? 0)), 0) ?? 0;
+  const wipRawMaterialCost = order.workInProgress?.rawMaterialCost || fallbackRawMaterialCost;
+
   const totalCost =
-    (order.workInProgress?.totalCost ?? 0) ||
+    (order.workInProgress?.totalCost && order.workInProgress.totalCost > 0 
+      ? order.workInProgress.totalCost 
+      : wipRawMaterialCost + (order.workInProgress?.laborCost ?? 0) + (order.workInProgress?.overheadCost ?? 0)) ||
     (order.cost ?? 0);
+  const outputQty = order.actualOutputQuantity || order.produced || order.plannedQuantity || order.quantity || 0;
+  const costPerUnit = outputQty > 0 ? totalCost / outputQty : 0;
+  const margin = Math.min(95, Math.max(0, parseFloat(marginPercent) || 0));
+  const suggestedSellingPrice = costPerUnit > 0 ? costPerUnit / (1 - margin / 100) : 0;
+  const expectedProfit = Math.max(0, suggestedSellingPrice - costPerUnit);
 
   return (
     <div className="p-6 space-y-5 pb-24" dir="rtl">
@@ -122,7 +136,7 @@ export default function ProductionOrderDetailPage() {
 
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div className="flex items-start gap-3 min-w-0">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-slate-950 to-emerald-800 text-white flex items-center justify-center shadow-md shadow-slate-950/10">
             <ClipboardList className="w-5 h-5" />
           </div>
           <div className="min-w-0">
@@ -173,9 +187,9 @@ export default function ProductionOrderDetailPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500">المادة</th>
-                      <th className="px-3 py-2 text-left  text-xs font-semibold text-slate-500">الكمية</th>
-                      <th className="px-3 py-2 text-left  text-xs font-semibold text-slate-500">التكلفة</th>
+                      <th className="px-3 py-2 text-right text-xs font-semibold text-slate-500">المادة الخام</th>
+                      <th className="px-3 py-2 text-left  text-xs font-semibold text-slate-500 w-32">الكمية</th>
+                      <th className="px-3 py-2 text-left  text-xs font-semibold text-slate-500 w-32">التكلفة المتوقعة</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -187,11 +201,11 @@ export default function ProductionOrderDetailPage() {
                             <div className="text-xs text-slate-400 font-mono">{it.product.code}</div>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-slate-700 text-left tabular-nums">
-                          {it.quantity.toLocaleString('ar-EG')} {it.product?.unit ?? ''}
+                        <td className="px-3 py-2 text-slate-700 font-semibold text-left tabular-nums">
+                          {it.quantity.toLocaleString('ar-EG')} {it.product?.unit || ''}
                         </td>
                         <td className="px-3 py-2 text-slate-600 text-left tabular-nums">
-                          {fmtMoney(it.cost)}
+                          {fmtMoney(it.cost || (it.product?.cost ?? 0) * it.quantity)}
                         </td>
                       </tr>
                     ))}
@@ -205,13 +219,35 @@ export default function ProductionOrderDetailPage() {
         <div className="space-y-5">
           <Section title="ملخص التكلفة" action={<Factory className="w-4 h-4 text-slate-400" />}>
             <dl className="space-y-2 text-sm">
-              <CostRow label="مواد خام"       value={fmtMoney(order.workInProgress?.rawMaterialCost)} />
+              <CostRow label="مواد خام"       value={fmtMoney(wipRawMaterialCost)} />
               <CostRow label="عمالة"           value={fmtMoney(order.workInProgress?.laborCost)} />
               <CostRow label="تشغيل"           value={fmtMoney(order.workInProgress?.overheadCost)} />
+              <CostRow label="تكلفة الوحدة" value={fmtMoney(costPerUnit)} />
               <div className="border-t border-slate-200 pt-2 mt-2">
                 <CostRow label="الإجمالي" value={fmtMoney(totalCost)} bold />
               </div>
             </dl>
+            <div className="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3 space-y-2">
+              <label className="flex items-center justify-between gap-3 text-sm text-emerald-900">
+                <span>هامش الربح المطلوب</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="95"
+                  step="0.5"
+                  value={marginPercent}
+                  onChange={e => setMarginPercent(e.target.value)}
+                  className="w-24 rounded-lg border border-emerald-200 bg-white px-2 py-1 text-center text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </label>
+              <CostRow label="سعر البيع المقترح" value={fmtMoney(suggestedSellingPrice)} bold />
+              <CostRow label="ربح متوقع للوحدة" value={fmtMoney(expectedProfit)} />
+              {costPerUnit <= 0 && (
+                <p className="text-xs text-amber-700">
+                  لا توجد تكلفة كافية لهذا المنتج. أضف فاتورة شراء أو رصيد افتتاحي للمواد الخام أولاً.
+                </p>
+              )}
+            </div>
           </Section>
 
           <Section title="الإجراءات" subtitle="انقل الأمر بين الحالات">
@@ -222,7 +258,7 @@ export default function ProductionOrderDetailPage() {
                   disabled={running}
                   icon={PlayCircle}
                   label="اعتماد وبدء التنفيذ (يخصم المواد)"
-                  className="bg-purple-600 hover:bg-purple-700 text-white"
+                  className="bg-cyan-700 hover:bg-cyan-800 text-white"
                 />
               )}
               {(order.status === 'approved' || order.status === 'in_progress' || order.status === 'waiting') && (

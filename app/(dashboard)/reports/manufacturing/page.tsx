@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import {
   ReportShell, ReportLabel, reportInputCls, fmtMoneyEGP, ReportSummaryCard,
@@ -41,12 +41,12 @@ export default function ManufacturingReportPage() {
 
   const ordersQ = useQuery({
     queryKey: ['production-orders'],
-    queryFn:  () => apiGet<ProductionOrderLite[]>('/api/production-orders'),
+    queryFn:  () => apiGetList<ProductionOrderLite>('/api/production-orders'),
     staleTime: 30_000,
   });
   const wasteQ = useQuery({
     queryKey: ['production-waste'],
-    queryFn:  () => apiGet<WasteLite[]>('/api/production-waste'),
+    queryFn:  () => apiGetList<WasteLite>('/api/production-waste'),
     staleTime: 30_000,
   });
 
@@ -105,6 +105,7 @@ export default function ManufacturingReportPage() {
         title="تقرير التصنيع"
         subtitle="ملخص أوامر الإنتاج والفاقد والتكاليف"
         periodLabel={periodLabel}
+        exportConfig={{ report: 'manufacturing', params: { fromDate: from, toDate: to } }}
         loading={ordersQ.isLoading || wasteQ.isLoading}
         error={(ordersQ.error || wasteQ.error) ? ((ordersQ.error || wasteQ.error) as Error).message : null}
         filters={
@@ -124,7 +125,7 @@ export default function ManufacturingReportPage() {
           <ReportSummaryCard label="إجمالي الأوامر"      value={summary.totalOrders} />
           <ReportSummaryCard label="أوامر مكتملة"         value={summary.completedOrders} accent="bg-emerald-50 border-emerald-200" />
           <ReportSummaryCard label="إجمالي المنتج"        value={summary.totalProduced.toLocaleString('ar-EG')} />
-          <ReportSummaryCard label="إجمالي تكلفة الإنتاج" value={fmtMoneyEGP(summary.totalCost)} accent="bg-blue-50 border-blue-200" />
+          <ReportSummaryCard label="إجمالي تكلفة الإنتاج" value={fmtMoneyEGP(summary.totalCost)} accent="bg-emerald-50 border-emerald-200" />
           <ReportSummaryCard label="إجمالي الفاقد"         value={summary.totalWaste.toLocaleString('ar-EG')} accent="bg-red-50 border-red-200" />
         </div>
 

@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Package } from 'lucide-react';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { Toast, useToast } from '@/components/ui/patterns';
 import { Field, SelectField, TextAreaField, Section, FieldGrid } from '@/components/ui/modal';
 import { EntityFormPage } from '@/components/forms/EntityFormPage';
@@ -18,12 +18,12 @@ export default function NewWastePage() {
 
   const productsQ = useQuery({
     queryKey: ['products', 'lite'],
-    queryFn:  () => apiGet<ProductLite[]>('/api/products'),
+    queryFn:  () => apiGetList<ProductLite>('/api/products'),
     staleTime: 60_000,
   });
   const ordersQ = useQuery({
     queryKey: ['production-orders'],
-    queryFn:  () => apiGet<OrderLite[]>('/api/production-orders'),
+    queryFn:  () => apiGetList<OrderLite>('/api/production-orders'),
     staleTime: 60_000,
   });
   const products = useMemo(() => productsQ.data ?? [], [productsQ.data]);
@@ -105,7 +105,7 @@ export default function NewWastePage() {
               </SelectField>
 
               {selectedProduct && (
-                <div className="sm:col-span-2 bg-blue-50 border border-blue-100 text-blue-800 rounded-xl p-3 text-xs flex items-center gap-2">
+                <div className="sm:col-span-2 bg-emerald-50 border border-emerald-100 text-emerald-900 rounded-xl p-3 text-xs flex items-center gap-2">
                   <Package className="w-4 h-4 flex-shrink-0" />
                   <span>
                     الرصيد الحالي:{' '}

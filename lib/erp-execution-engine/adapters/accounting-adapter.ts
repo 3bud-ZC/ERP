@@ -13,8 +13,22 @@ interface JournalEntryLine {
   description?: string;
 }
 
+const CANONICAL_LEDGER_TYPES = new Set([
+  'SALES_INVOICE',
+  'PURCHASE_INVOICE',
+  'SALES_RETURN',
+  'PURCHASE_RETURN',
+  'PAYMENT',
+  'PRODUCTION_ORDER',
+  'STOCK_ADJUSTMENT',
+]);
+
 export class AccountingAdapter {
   static async post(tx: ERPTransaction, result: any): Promise<any[]> {
+    if (CANONICAL_LEDGER_TYPES.has(tx.type)) {
+      return [];
+    }
+
     const entries: JournalEntryLine[] = [];
 
     switch (tx.type) {

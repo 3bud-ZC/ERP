@@ -2,7 +2,8 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGetList } from '@/lib/api/fetcher';
+import { matchesEntitySearch } from '@/lib/api/safe-array';
 import { queryKeys } from '@/lib/api/query-keys';
 import { Plus, X, Pencil, Trash2, FileText, AlertCircle, Search, Truck } from 'lucide-react';
 import Link from 'next/link';
@@ -31,8 +32,8 @@ export default function SuppliersPage() {
   const qc = useQueryClient();
   const suppliersQ = useQuery({
     queryKey: queryKeys.suppliers,
-    queryFn: () => apiGet<Supplier[]>('/api/suppliers'),
-    staleTime: 60_000,
+    queryFn: () => apiGetList<Supplier>('/api/suppliers'),
+    staleTime: 10_000,
   });
   const suppliers = useMemo(() => suppliersQ.data ?? [], [suppliersQ.data]);
   const loading = suppliersQ.isLoading;
@@ -49,15 +50,13 @@ export default function SuppliersPage() {
     qc.invalidateQueries({ queryKey: queryKeys.suppliers });
   }, [qc]);
 
-  const filtered = useMemo(() =>
-    suppliers.filter(s =>
-      !search ||
-      s.nameAr.includes(search) ||
-      (s.nameEn || '').toLowerCase().includes(search.toLowerCase()) ||
-      s.code.toLowerCase().includes(search.toLowerCase()) ||
-      (s.phone || '').includes(search) ||
-      (s.email || '').toLowerCase().includes(search.toLowerCase())
-    ), [suppliers, search]);
+  const filtered = useMemo(
+    () =>
+      suppliers.filter((s) =>
+        matchesEntitySearch(search, [s.nameAr, s.nameEn, s.code, s.phone, s.email]),
+      ),
+    [suppliers, search],
+  );
 
   async function handleDelete() {
     if (!deleteId) return;
@@ -77,7 +76,7 @@ export default function SuppliersPage() {
       subtitle={loading ? 'جاري التحميل…' : `${suppliers.length} مورد`}
       toolbar={
         <Link href="/suppliers/new"
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium">
+          className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium">
           <Plus className="w-4 h-4" /> إضافة مورد
         </Link>
       }
@@ -89,7 +88,7 @@ export default function SuppliersPage() {
           <Search className="absolute right-3 top-2.5 w-4 h-4 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="بحث بالاسم أو الرمز أو الهاتف…"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
           {search && (
             <button onClick={() => setSearch('')} className="absolute left-3 top-2.5 text-slate-400 hover:text-slate-600">
               <X className="w-4 h-4" />
@@ -140,7 +139,7 @@ export default function SuppliersPage() {
                         <FileText className="w-4 h-4" />
                       </Link>
                       <Link href={`/suppliers/${s.id}/edit`}
-                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="تعديل">
+                        className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors" title="تعديل">
                         <Pencil className="w-4 h-4" />
                       </Link>
                       <button onClick={() => { setDeleteId(s.id); setDeleteError(null); }}

@@ -8,10 +8,12 @@ export const revalidate = 0;
 
 export async function GET(request: Request) {
   try {
-    // Auth check
     const user = await getAuthenticatedUser(request);
     if (!user) {
       return apiError('لم يتم المصادقة', 401);
+    }
+    if (!user.tenantId) {
+      return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
     const { searchParams } = new URL(request.url);
@@ -25,9 +27,11 @@ export async function GET(request: Request) {
     const from = fromDate ? new Date(fromDate) : new Date(now.getFullYear(), now.getMonth(), 1);
     const to = toDate ? new Date(toDate) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-    // Build where clause
+    const tenantId = user.tenantId;
+
     const where: any = {
-      createdAt: { gte: from, lte: to },
+      tenantId,
+      date: { gte: from, lte: to },
     };
     if (supplierId) {
       where.supplierId = supplierId;
@@ -44,7 +48,7 @@ export async function GET(request: Request) {
           },
         },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { date: 'desc' },
     });
 
     // Filter by raw material if specified
@@ -57,18 +61,18 @@ export async function GET(request: Request) {
       );
 
       // Calculate raw material specific data
-      const materialItems = filteredInvoices.flatMap(inv => 
-        inv.items.filter(item => item.productId === rawMaterialId)
+      const materialItems = filteredInvoices.flatMap(inv =>
+        inv.items.filter(item => item.productId === rawMaterialId).map(item => ({
+          price: item.price,
+          quantity: item.quantity,
+          date: inv.date,
+        }))
       );
 
       const totalQuantity = materialItems.reduce((sum, item) => sum + item.quantity, 0);
       const suppliers = Array.from(new Set(filteredInvoices.map(inv => inv.supplier?.nameAr).filter(Boolean)));
       
-      const purchaseDetails = materialItems.map(item => ({
-        price: item.price,
-        quantity: item.quantity,
-        date: invoices.find(inv => inv.items.includes(item))?.createdAt,
-      }));
+      const purchaseDetails = materialItems;
 
       // CRITICAL: Calculate average raw material price
       const avgPrice = purchaseDetails.length > 0 
@@ -128,7 +132,8 @@ export async function GET(request: Request) {
       const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59);
 
       const monthWhere: any = {
-        createdAt: { gte: monthStart, lte: monthEnd },
+        tenantId,
+        date: { gte: monthStart, lte: monthEnd },
       };
       if (supplierId) monthWhere.supplierId = supplierId;
 
@@ -157,7 +162,7 @@ export async function GET(request: Request) {
         from: from.toISOString(),
         to: to.toISOString(),
       },
-    }, 'Purchase reports fetched successfully');
+    }, 'تم جلب تقرير المشتريات بنجاح');
   } catch (error) {
     console.error('Error fetching purchase reports:', error);
     return apiError('فشل في تحميل تقارير المشتريات', 500);

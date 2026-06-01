@@ -18,18 +18,16 @@ export type InvoicePrefix = 'INV' | 'PI' | 'PINV';
  * @param year            Optional year (defaults to current).
  */
 export async function resolveInvoiceNumber(
-  providedNumber: string | null | undefined,
+  _providedNumber: string | null | undefined,
   prefix: InvoicePrefix,
   tenantId: string,
   year: number = new Date().getFullYear(),
 ): Promise<string> {
-  const trimmed = (providedNumber ?? '').trim();
-  if (trimmed.length > 0) return trimmed;
-
   const entityKey =
     prefix === 'INV'
       ? CODE_ENTITY_KEYS.SALES_INVOICE
       : CODE_ENTITY_KEYS.PURCHASE_INVOICE;
 
-  return resolveEntityCode(null, entityKey, tenantId, undefined, year);
+  const { allocateEntityCode } = await import('./code-sequence.service');
+  return allocateEntityCode(entityKey, tenantId, undefined, year);
 }

@@ -8,12 +8,14 @@ import {
   FileText, Search, X,
 } from 'lucide-react';
 import { TableSkeleton, Toast, useToast } from '@/components/ui/patterns';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { cn } from '@/lib/utils';
 import {
   InvoiceConfig, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, fmtDate,
 } from './InvoiceConfig';
 import { InvoiceLayout } from './InvoiceLayout';
+import { PaymentModal } from '@/components/accounting/PaymentModal';
+import { WalletCards } from 'lucide-react';
 
 interface InvoiceRow {
   id: string;
@@ -24,8 +26,9 @@ interface InvoiceRow {
   grandTotal?: number;
   status?: string;
   paymentStatus?: string;
-  customer?: { nameAr?: string; name?: string };
-  supplier?: { nameAr?: string; name?: string };
+  paidAmount?: number;
+  customer?: { id?: string; nameAr?: string; name?: string };
+  supplier?: { id?: string; nameAr?: string; name?: string };
 }
 
 const PAGE_SIZE = 20;
@@ -57,7 +60,7 @@ const Pagination = memo(function Pagination({
               className={cn(
                 'min-w-[32px] px-2 py-1 rounded-lg text-sm font-medium border',
                 p === page
-                  ? 'bg-blue-600 text-white border-blue-600'
+                  ? 'bg-slate-950 text-white border-slate-950'
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50',
               )}>
               {p}
@@ -137,14 +140,15 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
   const [confirm,  setConfirm]  = useState<InvoiceRow | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [paymentInvoice, setPaymentInvoice] = useState<InvoiceRow | null>(null);
 
   const queryKey = useMemo(() => [config.kind, 'invoices', 'list'], [config.kind]);
 
-  const { data, isLoading, error, refetch } = useQuery({
-    queryKey,
-    queryFn: () => apiGet<InvoiceRow[]>(config.listApi),
-    staleTime: 30_000,
-  });
+    const { data, isLoading, error, refetch } = useQuery({
+      queryKey,
+      queryFn: () => apiGetList<InvoiceRow>(config.listApi),
+      staleTime: 0,
+    });
 
   /* Filters */
   const filtered = useMemo(() => {
@@ -157,8 +161,9 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
       const t = new Date(inv.date ?? inv.createdAt ?? 0).getTime();
       if (!Number.isNaN(t) && (t < fromTs || t >= toTs)) return false;
       if (q) {
+        const invoiceNum = (inv.invoiceNumber ?? '').toLowerCase();
         const partyName = (inv.customer?.nameAr ?? inv.supplier?.nameAr ?? '').toLowerCase();
-        if (!inv.invoiceNumber.toLowerCase().includes(q) && !partyName.includes(q)) return false;
+        if (!invoiceNum.includes(q) && !partyName.includes(q)) return false;
       }
       return true;
     });
@@ -220,7 +225,7 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
       subtitle={`${kpis.count} فاتورة • إجمالي ${fmtMoney(kpis.total)}`}
       toolbar={
         <Link href={`/invoices/${config.routeBase}/new`}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 shadow-sm transition-colors">
+          className="flex items-center gap-2 px-4 py-2 bg-slate-950 text-white rounded-lg text-sm font-medium hover:bg-slate-900 shadow-sm transition-colors">
           <Plus className="w-4 h-4" /> فاتورة جديدة
         </Link>
       }
@@ -243,20 +248,20 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }}
             placeholder={`بحث بالرقم أو ${config.partyLabel}…`}
-            className="w-full border border-slate-300 rounded-lg pr-9 pl-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-slate-300 rounded-lg pr-9 pl-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
           />
         </div>
         <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
-          className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+          className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
           <option value="all">كل الحالات</option>
           {Object.entries(STATUS_LABELS).map(([k, v]) => (
             <option key={k} value={k}>{v.label}</option>
           ))}
         </select>
         <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }}
-          className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
         <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }}
-          className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
         {hasFilters && (
           <button onClick={clearFilters}
             className="md:col-span-5 text-xs text-slate-500 hover:text-slate-800 self-start flex items-center gap-1">
@@ -271,7 +276,7 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
           <div className="p-8 text-center">
             <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-2" />
             <p className="text-sm text-red-600 mb-3">{(error as Error).message}</p>
-            <button onClick={() => refetch()} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
+            <button onClick={() => refetch()} className="px-4 py-2 bg-slate-950 text-white rounded-lg text-sm">
               إعادة المحاولة
             </button>
           </div>
@@ -285,7 +290,7 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
             </p>
             {!hasFilters && (
               <Link href={`/invoices/${config.routeBase}/new`}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
+                className="inline-flex items-center gap-2 px-4 py-2 bg-slate-950 text-white rounded-lg text-sm">
                 <Plus className="w-4 h-4" /> أنشئ أول فاتورة
               </Link>
             )}
@@ -311,9 +316,9 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
                   const payInfo = PAYMENT_LABELS[inv.paymentStatus ?? 'cash'] ?? PAYMENT_LABELS.cash;
                   return (
                     <tr key={inv.id} className="hover:bg-slate-50">
-                      <td className="px-3 py-2.5 text-blue-600 font-mono text-xs">
+                      <td className="px-3 py-2.5 text-emerald-700 font-mono text-xs">
                         <Link href={`/invoices/${config.routeBase}/${inv.id}`} className="hover:underline">
-                          {inv.invoiceNumber}
+                          {inv.invoiceNumber ?? '—'}
                         </Link>
                       </td>
                       <td className="px-3 py-2.5 text-slate-700">{partyName}</td>
@@ -335,9 +340,16 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
                         <div className="flex items-center justify-center gap-1">
                           <Link href={`/invoices/${config.routeBase}/${inv.id}`}
                             title="عرض"
-                            className="p-1.5 text-slate-500 hover:bg-blue-50 hover:text-blue-600 rounded-md">
+                            className="p-1.5 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700 rounded-md">
                             <Eye className="w-4 h-4" />
                           </Link>
+                          {inv.paymentStatus !== 'paid' && inv.status !== 'cancelled' && config.kind === 'purchase' && (
+                            <button onClick={() => setPaymentInvoice(inv)}
+                              title="سداد"
+                              className="p-1.5 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700 rounded-md">
+                              <WalletCards className="w-4 h-4" />
+                            </button>
+                          )}
                           <Link href={`/invoices/${config.routeBase}/${inv.id}/edit`}
                             title="تعديل"
                             className="p-1.5 text-slate-500 hover:bg-amber-50 hover:text-amber-600 rounded-md">
@@ -373,6 +385,21 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
           busy={deleting}
           onConfirm={doDelete}
           onCancel={() => { setConfirm(null); setDeleteError(null); }}
+        />
+      )}
+
+      {paymentInvoice && (
+        <PaymentModal
+          isOpen={!!paymentInvoice}
+          onClose={() => setPaymentInvoice(null)}
+          invoiceId={paymentInvoice.id}
+          supplierId={paymentInvoice.supplier?.id}
+          defaultAmount={Math.max(0, (paymentInvoice.grandTotal ?? paymentInvoice.total) - (paymentInvoice.paidAmount ?? 0))}
+          onSuccess={() => {
+            showToast('تم السداد بنجاح', 'success');
+            qc.invalidateQueries({ queryKey });
+            refetch();
+          }}
         />
       )}
     </InvoiceLayout>

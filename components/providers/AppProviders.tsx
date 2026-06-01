@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
 import { QueryProvider } from './QueryProvider';
 
 // ---------- Theme ----------
@@ -15,6 +16,7 @@ interface AppCtx { user: CurrentUser | null; tenant: TenantBranding | null; load
 const AppContext = createContext<AppCtx>({ user: null, tenant: null, loading: true, refresh: async () => {} });
 
 export function AppProviders({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const [theme, setTheme] = useState<Theme>('light');
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [tenant, setTenant] = useState<TenantBranding | null>(null);
@@ -39,6 +41,13 @@ export function AppProviders({ children }: { children: ReactNode }) {
   }, [tenant?.brandColor]);
 
   const refresh = useCallback(async () => {
+    if (pathname === '/login' || pathname === '/' || pathname.startsWith('/onboarding')) {
+      setUser(null);
+      setTenant(null);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       const [meRes, onRes] = await Promise.all([
@@ -47,7 +56,18 @@ export function AppProviders({ children }: { children: ReactNode }) {
       ]);
       if (meRes?.ok) {
         const j = await meRes.json();
-        setUser(j.data?.user || j.data || null);
+        const u = j.data?.user ?? j.data;
+        if (u && typeof u === 'object' && 'id' in u) {
+          setUser({
+            id: String(u.id),
+            email: String(u.email ?? ''),
+            name: String(u.name ?? ''),
+            roles: Array.isArray(u.roles) ? u.roles : [],
+            permissions: Array.isArray(u.permissions) ? u.permissions : [],
+          });
+        } else {
+          setUser(null);
+        }
       }
       if (onRes?.ok) {
         const j = await onRes.json();
@@ -62,7 +82,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pathname]);
 
   useEffect(() => { refresh(); }, [refresh]);
 

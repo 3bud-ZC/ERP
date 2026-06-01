@@ -2,12 +2,19 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { hashPassword } from '@/lib/auth';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
-import { getAuthenticatedUser, checkRole } from '@/lib/auth';
+import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { logActivity } from '@/lib/activity-log';
+import { isPlatformAdmin } from '@/lib/admin/platform-admin';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const validRoles = ['admin', 'manager', 'accountant', 'inventory_manager', 'sales_rep', 'purchase_officer'];
+
+function canManageUsers(user: { email: string; roles: string[]; permissions?: string[] }) {
+  return isPlatformAdmin(user) || checkPermission({ ...user, permissions: user.permissions ?? [] }, 'manage_users');
+}
 
 // GET - List all users (ADMIN only)
 export async function GET(request: Request) {
@@ -17,12 +24,19 @@ export async function GET(request: Request) {
       return apiError('لم يتم المصادقة', 401);
     }
 
-    // Only ADMIN can list users
-    if (!checkRole(user, 'ADMIN')) {
+    if (!canManageUsers(user)) {
       return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
     }
 
+    const tenantUserIds = user.tenantId
+      ? (await prisma.userTenantRole.findMany({
+          where: { tenantId: user.tenantId },
+          select: { userId: true },
+        })).map(row => row.userId)
+      : undefined;
+
     const users = await prisma.user.findMany({
+      where: tenantUserIds ? { id: { in: tenantUserIds } } : undefined,
       select: {
         id: true,
         email: true,
@@ -38,6 +52,12 @@ export async function GET(request: Request) {
                 nameAr: true,
               },
             },
+          },
+        },
+        userTenantRoles: {
+          select: {
+            tenantId: true,
+            role: { select: { code: true, nameAr: true } },
           },
         },
       },
@@ -58,13 +78,14 @@ export async function POST(request: Request) {
       return apiError('لم يتم المصادقة', 401);
     }
 
-    // Only ADMIN can create users
-    if (!checkRole(user, 'ADMIN')) {
+    if (!canManageUsers(user)) {
       return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
     }
 
     const body = await request.json();
-    const { email, name, password, role } = body;
+    const { email, name, password } = body;
+    const role = String(body.role || 'manager').trim();
+    const tenantId = isPlatformAdmin(user) && body.tenantId ? String(body.tenantId) : user.tenantId;
 
     // Validate required fields
     if (!email || !name || !password) {
@@ -82,10 +103,12 @@ export async function POST(request: Request) {
       return apiError('كلمة المرور يجب أن تكون 8 أحرف على الأقل', 400);
     }
 
-    // Validate role if provided
-    const validRoles = ['ADMIN', 'ACCOUNTANT', 'USER'];
     if (role && !validRoles.includes(role)) {
       return apiError('صلاحية غير صالحة', 400);
+    }
+
+    if (!tenantId && !isPlatformAdmin(user)) {
+      return apiError('لا يوجد مستأجر مرتبط بالمستخدم الحالي', 400);
     }
 
     // Check if user already exists
@@ -117,16 +140,23 @@ export async function POST(request: Request) {
       },
     });
 
-    // Assign role if specified
-    if (role) {
-      const roleRecord = await prisma.role.findUnique({
-        where: { code: role },
+    const roleRecord = await prisma.role.findUnique({
+      where: { code: role },
+    });
+
+    if (roleRecord) {
+      await prisma.userRole.create({
+        data: {
+          userId: newUser.id,
+          roleId: roleRecord.id,
+        },
       });
 
-      if (roleRecord) {
-        await prisma.userRole.create({
+      if (tenantId) {
+        await prisma.userTenantRole.create({
           data: {
             userId: newUser.id,
+            tenantId,
             roleId: roleRecord.id,
           },
         });
@@ -156,8 +186,7 @@ export async function PUT(request: Request) {
       return apiError('لم يتم المصادقة', 401);
     }
 
-    // Only ADMIN can update users
-    if (!checkRole(user, 'ADMIN')) {
+    if (!canManageUsers(user)) {
       return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
     }
 
@@ -181,8 +210,6 @@ export async function PUT(request: Request) {
       }
     }
 
-    // Validate role if provided
-    const validRoles = ['ADMIN', 'ACCOUNTANT', 'USER'];
     if (role && !validRoles.includes(role)) {
       return apiError('صلاحية غير صالحة', 400);
     }
@@ -200,6 +227,11 @@ export async function PUT(request: Request) {
 
     if (!existingUser) {
       return apiError('المستخدم غير موجود', 404);
+    }
+
+    if (!isPlatformAdmin(user) && user.tenantId) {
+      const sameTenant = await prisma.userTenantRole.findFirst({ where: { userId: id, tenantId: user.tenantId } });
+      if (!sameTenant) return apiError('المستخدم خارج نطاق شركتك', 403);
     }
 
     // Update user
@@ -238,6 +270,17 @@ export async function PUT(request: Request) {
             roleId: roleRecord.id,
           },
         });
+
+        if (user.tenantId) {
+          await prisma.userTenantRole.deleteMany({ where: { userId: id, tenantId: user.tenantId } });
+          await prisma.userTenantRole.create({
+            data: {
+              userId: id,
+              tenantId: user.tenantId,
+              roleId: roleRecord.id,
+            },
+          });
+        }
       }
     }
 
@@ -265,8 +308,7 @@ export async function DELETE(request: Request) {
       return apiError('لم يتم المصادقة', 401);
     }
 
-    // Only ADMIN can deactivate users
-    if (!checkRole(user, 'ADMIN')) {
+    if (!canManageUsers(user)) {
       return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
     }
 
@@ -295,6 +337,11 @@ export async function DELETE(request: Request) {
 
     if (!existingUser) {
       return apiError('المستخدم غير موجود', 404);
+    }
+
+    if (!isPlatformAdmin(user) && user.tenantId) {
+      const sameTenant = await prisma.userTenantRole.findFirst({ where: { userId: id, tenantId: user.tenantId } });
+      if (!sameTenant) return apiError('المستخدم خارج نطاق شركتك', 403);
     }
 
     // Deactivate user (soft delete)

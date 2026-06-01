@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
+import { CODE_ENTITY_KEYS, allocateEntityCode } from '@/lib/code-sequence.service';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -16,14 +17,15 @@ export async function GET(request: Request) {
     if (!checkPermission(user, 'read_production_order')) {
       return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
     }
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     const status = searchParams.get('status');
 
     if (id) {
-      const line = await (prisma as any).productionLine.findUnique({
-        where: { id },
+      const line = await (prisma as any).productionLine.findFirst({
+        where: { id, tenantId: user.tenantId },
         include: {
           assignments: {
             include: {
@@ -48,7 +50,7 @@ export async function GET(request: Request) {
       return apiSuccess(line, 'Production line fetched');
     }
 
-    const where: any = {};
+    const where: any = { tenantId: user.tenantId };
     if (status) {
       where.status = status;
     }
@@ -90,17 +92,21 @@ export async function POST(request: Request) {
     if (!checkPermission(user, 'create_production_order')) {
       return apiError('ليس لديك صلاحية لإنشاء خط إنتاج', 403);
     }
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
     const body = await request.json();
     const { name, code, capacityPerHour, description, status = 'active' } = body;
 
-    if (!name || !code) {
-      return apiError('اسم خط الإنتاج والكود مطلوبان', 400);
+    if (!name || !String(name).trim()) {
+      return apiError('اسم خط الإنتاج مطلوب', 400);
     }
+    const resolvedCode = code && String(code).trim()
+      ? String(code).trim().toUpperCase()
+      : await allocateEntityCode(CODE_ENTITY_KEYS.PRODUCTION_LINE, user.tenantId);
 
     // Check for duplicate code
     const existing = await (prisma as any).productionLine.findUnique({
-      where: { code },
+      where: { code: resolvedCode },
     });
 
     if (existing) {
@@ -110,10 +116,11 @@ export async function POST(request: Request) {
     const line = await (prisma as any).productionLine.create({
       data: {
         name,
-        code: code.toUpperCase(),
-        capacityPerHour: capacityPerHour || 0,
-        description,
+        code: resolvedCode,
+        capacityPerHour: Number(capacityPerHour) || 0,
+        description: description || null,
         status,
+        tenantId: user.tenantId,
       },
     });
 
@@ -145,6 +152,7 @@ export async function PUT(request: Request) {
     if (!checkPermission(user, 'update_production_order')) {
       return apiError('ليس لديك صلاحية لتعديل خط إنتاج', 403);
     }
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
     const body = await request.json();
     const { id, name, capacityPerHour, description, status } = body;
@@ -153,12 +161,18 @@ export async function PUT(request: Request) {
       return apiError('معرف خط الإنتاج مطلوب', 400);
     }
 
+    const existing = await (prisma as any).productionLine.findFirst({
+      where: { id, tenantId: user.tenantId },
+      select: { id: true },
+    });
+    if (!existing) return apiError('خط الإنتاج غير موجود', 404);
+
     const line = await (prisma as any).productionLine.update({
       where: { id },
       data: {
-        name,
-        capacityPerHour,
-        description,
+        ...(name && { name: String(name).trim() }),
+        capacityPerHour: Number(capacityPerHour) || 0,
+        description: description || null,
         status,
       },
     });
@@ -191,6 +205,7 @@ export async function DELETE(request: Request) {
     if (!checkPermission(user, 'delete_production_order')) {
       return apiError('ليس لديك صلاحية لحذف خط إنتاج', 403);
     }
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -200,8 +215,8 @@ export async function DELETE(request: Request) {
     }
 
     // Check if line has active orders
-    const line = await (prisma as any).productionLine.findUnique({
-      where: { id },
+    const line = await (prisma as any).productionLine.findFirst({
+      where: { id, tenantId: user.tenantId },
       include: {
         productionOrders: {
           where: {
@@ -219,8 +234,9 @@ export async function DELETE(request: Request) {
       return apiError('لا يمكن حذف خط الإنتاج لأنه يحتوي على أوامر إنتاج نشطة', 400);
     }
 
-    await (prisma as any).productionLine.delete({
+    await (prisma as any).productionLine.update({
       where: { id },
+      data: { status: 'inactive' },
     });
 
     await logAuditAction(
@@ -234,7 +250,7 @@ export async function DELETE(request: Request) {
       request.headers.get('user-agent') || undefined
     );
 
-    return apiSuccess({ id }, 'تم حذف خط الإنتاج بنجاح');
+    return apiSuccess({ id, mode: 'inactive' }, 'تم إلغاء تفعيل خط الإنتاج بنجاح');
   } catch (error) {
     return handleApiError(error, 'Delete production line');
   }

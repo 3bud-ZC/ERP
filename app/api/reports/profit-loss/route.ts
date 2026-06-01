@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser } from '@/lib/auth';
+import { hasReportAccess } from '@/lib/reports/report-access';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -11,6 +12,7 @@ export async function GET(request: Request) {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر', 400);
+    if (!hasReportAccess(user, 'profit-loss')) return apiError('ليس لديك صلاحية لعرض تقرير قائمة الدخل', 403);
 
     const { searchParams } = new URL(request.url);
     const now = new Date();
@@ -113,8 +115,8 @@ export async function GET(request: Request) {
       },
       netProfit,
       isValid: validationCheck,
-    }, 'P&L report fetched');
+    }, 'تم جلب تقرير قائمة الدخل بنجاح');
   } catch (error) {
-    return handleApiError(error, 'Profit & Loss report');
+    return handleApiError(error, 'Profit and Loss report');
   }
 }

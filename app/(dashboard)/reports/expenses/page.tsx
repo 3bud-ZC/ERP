@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import {
   ReportShell, ReportLabel, reportInputCls, fmtMoneyEGP, ReportSummaryCard,
@@ -30,7 +30,7 @@ export default function ExpensesReportPage() {
 
   const expensesQ = useQuery({
     queryKey: ['expenses'],
-    queryFn:  () => apiGet<Expense[]>('/api/expenses'),
+    queryFn:  () => apiGetList<Expense>('/api/expenses'),
     staleTime: 60_000,
   });
   const allExpenses = useMemo(() => expensesQ.data ?? [], [expensesQ.data]);
@@ -76,6 +76,7 @@ export default function ExpensesReportPage() {
         title="تقرير المصروفات"
         subtitle="إجمالي المصروفات وتفصيلها"
         periodLabel={periodLabel}
+        exportConfig={{ report: 'expenses', params: { fromDate: from, toDate: to, category } }}
         loading={expensesQ.isLoading}
         error={expensesQ.error ? (expensesQ.error as Error).message : null}
         filters={

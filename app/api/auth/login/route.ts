@@ -16,10 +16,10 @@ import { getSystemState } from '@/lib/system-state';
 import { cookies } from 'next/headers';
 import { logger } from '@/lib/logger';
 
-// Strict rate limit: 5 attempts per 15 minutes per IP
+// Keep login protected without locking the owner out during setup/support.
 const loginRateLimit = {
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  maxRequests: 5, // 5 attempts
+  windowMs: 5 * 60 * 1000,
+  maxRequests: 20,
 };
 
 /**
@@ -51,9 +51,19 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check rate limit
+    const body = await request.json();
+    const email = String(body.email || '').trim().toLowerCase();
+    const password = String(body.password || '');
+
+    // Validate input
+    if (!email || !password) {
+      logger.warn({ requestId }, 'Missing credentials');
+      return apiError('البريد الإلكتروني وكلمة المرور مطلوبان', 400);
+    }
+
+    // Check rate limit after reading email so one mistaken user does not block all logins.
     const identifier = getRateLimitIdentifier(request);
-    const rateLimitResult = checkRateLimit(`login:${identifier}`, loginRateLimit);
+    const rateLimitResult = checkRateLimit(`login:${identifier}:${email}`, loginRateLimit);
     
     if (!rateLimitResult.allowed) {
       logger.warn({ 
@@ -70,15 +80,6 @@ export async function POST(request: Request) {
           remaining: 0 
         }
       );
-    }
-
-    const body = await request.json();
-    const { email, password } = body;
-
-    // Validate input
-    if (!email || !password) {
-      logger.warn({ requestId }, 'Missing credentials');
-      return apiError('البريد الإلكتروني وكلمة المرور مطلوبان', 400);
     }
 
     // PRODUCTION: Direct login - NO bootstrap, NO auto-create

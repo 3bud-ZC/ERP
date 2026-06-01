@@ -42,6 +42,7 @@ export default function BalanceSheetPage() {
         title="الميزانية العمومية"
         subtitle="الأصول = الخصوم + حقوق الملكية"
         periodLabel={`بتاريخ ${new Date(asOf).toLocaleDateString('ar-EG')}`}
+        exportConfig={{ report: 'balance-sheet', params: { asOfDate: asOf } }}
         loading={reportQ.isLoading}
         error={reportQ.error ? (reportQ.error as Error).message : null}
         filters={
@@ -54,7 +55,7 @@ export default function BalanceSheetPage() {
         {data && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <ReportSummaryCard label="إجمالي الأصول" value={fmtMoneyEGP(data.summary.totalAssets)} accent="bg-blue-50 border-blue-200" />
+              <ReportSummaryCard label="إجمالي الأصول" value={fmtMoneyEGP(data.summary.totalAssets)} accent="bg-emerald-50 border-emerald-200" />
               <ReportSummaryCard label="إجمالي الخصوم" value={fmtMoneyEGP(data.summary.totalLiabilities)} accent="bg-amber-50 border-amber-200" />
               <ReportSummaryCard label="إجمالي حقوق الملكية" value={fmtMoneyEGP(data.summary.totalEquity)} accent="bg-emerald-50 border-emerald-200" />
             </div>
@@ -66,7 +67,7 @@ export default function BalanceSheetPage() {
             )}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <BSSection title="الأصول" lines={data.assets.lines} total={data.assets.total} accent="text-blue-700" />
+              <BSSection title="الأصول" lines={data.assets.lines} total={data.assets.total} accent="text-emerald-800" />
               <div className="space-y-4">
                 <BSSection title="الخصوم" lines={data.liabilities.lines} total={data.liabilities.total} accent="text-amber-700" />
                 <BSSection title="حقوق الملكية"

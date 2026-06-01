@@ -6,6 +6,7 @@ import { Warehouse } from 'lucide-react';
 import { useToast, Toast } from '@/components/ui/patterns';
 import { Field, Section, FieldGrid } from '@/components/ui/modal';
 import { EntityFormPage } from '@/components/forms/EntityFormPage';
+import { AutoCodeField } from '@/components/forms/AutoCodeField';
 
 export interface WarehouseExisting {
   id:        string;
@@ -18,7 +19,7 @@ export interface WarehouseExisting {
   isActive?: boolean;
 }
 
-const empty = { code: '', nameAr: '', nameEn: '', address: '', phone: '', manager: '' };
+const empty = { nameAr: '', nameEn: '', address: '', phone: '', manager: '' };
 
 export function WarehouseForm({
   mode,
@@ -33,7 +34,6 @@ export function WarehouseForm({
   const [form, setForm] = useState(() =>
     existing
       ? {
-          code:    existing.code,
           nameAr:  existing.nameAr,
           nameEn:  existing.nameEn  ?? '',
           address: existing.address ?? '',
@@ -49,7 +49,6 @@ export function WarehouseForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!form.code.trim())   return setError('الرمز مطلوب');
     if (!form.nameAr.trim()) return setError('الاسم بالعربية مطلوب');
 
     setSaving(true);
@@ -57,7 +56,6 @@ export function WarehouseForm({
       const payload =
         mode === 'create'
           ? {
-              code:   form.code.trim(),
               nameAr: form.nameAr.trim(),
               ...(form.nameEn  && { nameEn:  form.nameEn.trim() }),
               ...(form.address && { address: form.address.trim() }),
@@ -66,7 +64,6 @@ export function WarehouseForm({
             }
           : {
               id:      existing!.id,
-              code:    form.code.trim(),
               nameAr:  form.nameAr.trim(),
               nameEn:  form.nameEn.trim()  || null,
               address: form.address.trim() || null,
@@ -113,10 +110,9 @@ export function WarehouseForm({
         primaryLabel={mode === 'create' ? 'حفظ المستودع' : 'حفظ التعديلات'}
       >
         <form id="warehouse-form" onSubmit={handleSubmit} className="space-y-5">
-          <Section title="البيانات الأساسية" subtitle="الرمز والاسم ورقم الهاتف">
+          <Section title="البيانات الأساسية" subtitle="الاسم ورقم الهاتف">
             <FieldGrid>
-              <Field label="الرمز" required value={form.code} placeholder="WH-001"
-                onChange={e => setForm(f => ({ ...f, code: e.target.value }))} />
+              <AutoCodeField mode={mode} value={existing?.code} />
               <Field label="الهاتف" value={form.phone} placeholder="0501234567"
                 onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
               <Field label="الاسم بالعربية" required value={form.nameAr} placeholder="المستودع الرئيسي"

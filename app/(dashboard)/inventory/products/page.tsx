@@ -2,7 +2,8 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGetList } from '@/lib/api/fetcher';
+import { matchesEntitySearch } from '@/lib/api/safe-array';
 import { queryKeys } from '@/lib/api/query-keys';
 import { Plus, AlertTriangle, X, Pencil, Trash2, Search, Package, CheckCircle } from 'lucide-react';
 import Link from 'next/link';
@@ -27,13 +28,17 @@ function fmtEGP(v?: number | null) {
   return v.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ج.م';
 }
 
+function safeNumber(v?: number | null) {
+  return Number(v ?? 0);
+}
+
 const typeLabels: Record<string, string> = {
   finished_product: 'منتج نهائي',
   raw_material:     'مواد خام',
 };
 
 const typeColors: Record<string, string> = {
-  finished_product: 'bg-blue-50 text-blue-700',
+  finished_product: 'bg-emerald-50 text-emerald-800',
   raw_material:     'bg-amber-50 text-amber-700',
 };
 
@@ -52,9 +57,10 @@ export default function ProductsPage() {
 
   const productsQ = useQuery({
     queryKey: queryKeys.products(activeType),
-    queryFn: () => apiGet<Product[]>(
-      activeType === 'all' ? '/api/products' : `/api/products?type=${activeType}`
-    ),
+    queryFn: () =>
+      apiGetList<Product>(
+        activeType === 'all' ? '/api/products' : `/api/products?type=${activeType}`,
+      ),
     staleTime: 0,
   });
   const products = useMemo(() => productsQ.data ?? [], [productsQ.data]);
@@ -71,13 +77,13 @@ export default function ProductsPage() {
     qc.invalidateQueries({ queryKey: ['products'] });
   }, [qc]);
 
-  const filtered = useMemo(() =>
-    products.filter(p =>
-      !search ||
-      p.nameAr.includes(search) ||
-      (p.nameEn || '').toLowerCase().includes(search.toLowerCase()) ||
-      p.code.toLowerCase().includes(search.toLowerCase())
-    ), [products, search]);
+  const filtered = useMemo(
+    () =>
+      products.filter((p) =>
+        matchesEntitySearch(search, [p.nameAr, p.nameEn, p.code]),
+      ),
+    [products, search],
+  );
 
   const lowStockCount = useMemo(() => products.filter(p => p.stock <= (p.minStock ?? 0)).length, [products]);
 
@@ -108,20 +114,20 @@ export default function ProductsPage() {
       }
       toolbar={
         <Link href="/inventory/products/new"
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium">
+          className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium">
           <Plus className="w-4 h-4" /> إضافة منتج
         </Link>
       }
     >
       <Toast toast={toast} />
 
-      <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50/80 px-4 py-3 text-sm text-blue-900 flex flex-wrap items-center gap-3">
+      <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 text-sm text-slate-950 flex flex-wrap items-center gap-3">
         <span>تم فصل المخزون إلى صفحتين متخصصتين:</span>
-        <Link href="/inventory/raw-materials" className="font-semibold underline hover:text-blue-700">
+        <Link href="/inventory/raw-materials" className="font-semibold underline hover:text-emerald-800">
           المواد الخام
         </Link>
         <span>·</span>
-        <Link href="/inventory/finished-products" className="font-semibold underline hover:text-blue-700">
+        <Link href="/inventory/finished-products" className="font-semibold underline hover:text-emerald-800">
           المنتجات النهائية
         </Link>
       </div>
@@ -140,7 +146,7 @@ export default function ProductsPage() {
           <Search className="absolute right-3 top-2.5 w-4 h-4 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="بحث بالاسم أو الرمز…"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
           {search && (
             <button onClick={() => setSearch('')} className="absolute left-3 top-2.5 text-slate-400 hover:text-slate-600">
               <X className="w-4 h-4" />
@@ -177,7 +183,9 @@ export default function ProductsPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map(p => {
-                const lowStock = p.stock <= (p.minStock ?? 0);
+                const stock = safeNumber(p.stock);
+                const minStock = safeNumber(p.minStock);
+                const lowStock = stock <= minStock;
                 return (
                   <tr key={p.id} className={`hover:bg-slate-50 transition-colors ${lowStock ? 'bg-red-50/30' : ''}`}>
                     <td className="px-5 py-3 text-sm font-mono text-slate-500">{p.code}</td>
@@ -191,10 +199,10 @@ export default function ProductsPage() {
                       </span>
                     </td>
                     <td className="px-5 py-3 text-sm font-semibold text-slate-700 text-left tabular-nums">
-                      {p.stock.toLocaleString('ar-EG')} {p.unit ?? ''}
+                      {stock.toLocaleString('ar-EG')} {p.unit ?? ''}
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-500 text-left tabular-nums">
-                      {p.minStock != null ? p.minStock.toLocaleString('ar-EG') : '—'}
+                      {p.minStock != null ? minStock.toLocaleString('ar-EG') : '—'}
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-600 text-left tabular-nums">{fmtEGP(p.cost)}</td>
                     <td className="px-5 py-3 text-sm text-slate-700 font-medium text-left tabular-nums">{fmtEGP(p.price)}</td>
@@ -211,7 +219,7 @@ export default function ProductsPage() {
                     <td className="px-5 py-3">
                       <div className="flex items-center justify-center gap-1.5">
                         <Link href={`/inventory/products/${p.id}/edit`}
-                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="تعديل">
+                          className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors" title="تعديل">
                           <Pencil className="w-4 h-4" />
                         </Link>
                         <button onClick={() => setDeleteId(p.id)}

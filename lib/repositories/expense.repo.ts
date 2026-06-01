@@ -10,6 +10,13 @@ export const expenseRepo = {
     return prisma.expense.findMany({ orderBy: { createdAt: 'desc' } });
   },
 
+  listByTenant(tenantId: string) {
+    return prisma.expense.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+    });
+  },
+
   findById(id: string) {
     return prisma.expense.findUnique({ where: { id } });
   },

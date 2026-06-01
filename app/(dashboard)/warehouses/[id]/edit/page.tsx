@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
+import { asArray } from '@/lib/api/safe-array';
 import { WarehouseForm, type WarehouseExisting } from '@/components/warehouses/WarehouseForm';
 import { ErrorBanner } from '@/components/ui/patterns';
 
@@ -16,10 +17,10 @@ export default function EditWarehousePage() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    apiGet<WarehouseExisting[]>('/api/warehouses')
-      .then(list => {
+    apiGetList<WarehouseExisting>('/api/warehouses')
+      .then((list) => {
         if (!active) return;
-        const found = list.find(w => w.id === id);
+        const found = asArray<WarehouseExisting>(list).find((w) => w.id === id);
         if (found) setData(found);
         else setError('المستودع غير موجود');
       })

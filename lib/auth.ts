@@ -7,6 +7,7 @@ import { prisma } from './db';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { setTenantContext, getTenantContext, clearTenantContext } from './prisma-tenant-middleware';
+import { tenantStatusAllowsAccess } from './admin/platform-admin';
 
 const JWT_EXPIRY = '7d';
 
@@ -167,6 +168,11 @@ export async function loginUser(
             },
           },
         },
+        userTenantRoles: {
+          include: {
+            tenant: true,
+          },
+        },
       },
     });
 
@@ -176,6 +182,11 @@ export async function loginUser(
 
     if (!user.isActive) {
       throw new Error('حسابك معطل');
+    }
+
+    const activeTenantRole = user.userTenantRoles[0];
+    if (activeTenantRole?.tenant && !tenantStatusAllowsAccess(activeTenantRole.tenant.status)) {
+      throw new Error('حساب الشركة غير نشط. تواصل مع مالك النظام');
     }
 
     // Verify password
@@ -191,7 +202,7 @@ export async function loginUser(
     });
 
     // Get tenant ID BEFORE generating token (required for JWT payload)
-    const tenantId = await getUserTenantId(user.id);
+    const tenantId = activeTenantRole?.tenantId || await getUserTenantId(user.id);
 
     // Generate token with tenantId for secure multi-tenant isolation
     const token = generateToken(user.id, tenantId);
@@ -480,6 +491,15 @@ export async function getUserTenantId(userId: string): Promise<string | null> {
   }
 }
 
+async function isTenantActive(tenantId?: string | null): Promise<boolean> {
+  if (!tenantId) return true;
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { status: true },
+  });
+  return tenantStatusAllowsAccess(tenant?.status);
+}
+
 /**
  * Set tenant context for authenticated user
  */
@@ -507,23 +527,30 @@ export async function getAuthenticatedUser(req: Request): Promise<{
       return null;
     }
 
-    // Parse cookies to find token
-    const cookies = cookieHeader.split(';').reduce((acc: any, cookie) => {
-      const [key, value] = cookie.trim().split('=');
-      acc[key] = value;
-      return acc;
-    }, {});
+    // Parse all cookies named "token" to handle duplicate-cookie edge cases.
+    // We accept the first cryptographically valid JWT and ignore stale/invalid ones.
+    const tokenCandidates = cookieHeader
+      .split(';')
+      .map((part) => part.trim())
+      .filter((part) => part.startsWith('token='))
+      .map((part) => part.slice('token='.length))
+      .filter(Boolean);
 
-    const token = cookies['token'];
-    if (!token) {
+    if (tokenCandidates.length === 0) {
       return null;
     }
 
-    // PRODUCTION: Full JWT verification with cryptographic signature validation
-    const decoded = verifyToken(token);
+    let decoded: VerifiedToken | null = null;
+    for (const candidate of tokenCandidates) {
+      const verified = verifyToken(candidate);
+      if (verified) {
+        decoded = verified;
+        break;
+      }
+    }
 
     if (!decoded) {
-      // Token invalid, expired, or tampered - reject immediately
+      // All token candidates were invalid/expired/tampered.
       return null;
     }
 
@@ -555,6 +582,10 @@ export async function getAuthenticatedUser(req: Request): Promise<{
     }
     
     if (tenantId) {
+      const tenantActive = await isTenantActive(tenantId);
+      if (!tenantActive) {
+        return null;
+      }
       setTenantContext(tenantId);
     }
 
@@ -582,7 +613,7 @@ export function checkPermission(user: { permissions: string[]; roles?: string[];
   if (user.roles?.includes('admin') || user.email?.includes('admin')) {
     return true;
   }
-  return user.permissions.includes(permissionCode);
+  return (user.permissions ?? []).includes(permissionCode);
 }
 
 /**

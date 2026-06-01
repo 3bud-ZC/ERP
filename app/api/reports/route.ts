@@ -9,12 +9,13 @@ export const revalidate = 0;
 
 // ==================== PROFIT & LOSS STATEMENT ====================
 
-async function getProfitAndLossReport(fromDate?: Date, toDate?: Date) {
+async function getProfitAndLossReport(tenantId: string, fromDate?: Date, toDate?: Date) {
   const startDate = fromDate || new Date(new Date().getFullYear(), 0, 1);
   const endDate = toDate || new Date();
 
   const revenueEntries = await prisma.journalEntry.findMany({
     where: {
+      tenantId,
       isPosted: true,
       entryDate: {
         gte: startDate,
@@ -27,6 +28,7 @@ async function getProfitAndLossReport(fromDate?: Date, toDate?: Date) {
 
   const expenseEntries = await prisma.journalEntry.findMany({
     where: {
+      tenantId,
       isPosted: true,
       entryDate: {
         gte: startDate,
@@ -87,14 +89,16 @@ async function getProfitAndLossReport(fromDate?: Date, toDate?: Date) {
 
 // ==================== BALANCE SHEET ====================
 
-async function getBalanceSheet(asOfDate?: Date) {
+async function getBalanceSheet(tenantId: string, asOfDate?: Date) {
   const date = asOfDate || new Date();
 
   // SINGLE QUERY to get all account balances at once
   const accountBalances = await prisma.journalEntryLine.groupBy({
     by: ['accountCode'],
     where: {
+      tenantId,
       journalEntry: {
+        tenantId,
         isPosted: true,
         entryDate: { lte: date },
       },
@@ -107,7 +111,7 @@ async function getBalanceSheet(asOfDate?: Date) {
 
   // Fetch account details once
   const accounts = await prisma.account.findMany({
-    where: { isActive: true },
+    where: { tenantId, isActive: true },
   });
 
   // Calculate balances in application memory using aggregated data
@@ -174,12 +178,13 @@ async function getBalanceSheet(asOfDate?: Date) {
 
 // ==================== CASH FLOW REPORT ====================
 
-async function getCashFlowReport(fromDate?: Date, toDate?: Date) {
+async function getCashFlowReport(tenantId: string, fromDate?: Date, toDate?: Date) {
   const startDate = fromDate || new Date(new Date().getFullYear(), 0, 1);
   const endDate = toDate || new Date();
 
   const allEntries = await prisma.journalEntry.findMany({
     where: {
+      tenantId,
       isPosted: true,
       entryDate: { gte: startDate, lte: endDate },
     },
@@ -247,9 +252,9 @@ async function getCashFlowReport(fromDate?: Date, toDate?: Date) {
 
 // ==================== INVENTORY VALUATION ====================
 
-async function getInventoryValuation() {
+async function getInventoryValuation(tenantId: string) {
   const products = await prisma.product.findMany({
-    where: { stock: { gt: 0 } },
+    where: { tenantId, stock: { gt: 0 } },
     include: { inventoryTransactions: true },
   });
 
@@ -285,6 +290,8 @@ export async function GET(request: Request) {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!checkPermission(user, 'view_financial_reports')) return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
+    const tenantId = user.tenantId;
 
     const { searchParams } = new URL(request.url);
     const reportType = searchParams.get('type') || 'summary';
@@ -295,29 +302,29 @@ export async function GET(request: Request) {
 
     switch (reportType) {
       case 'profit-loss':
-        report.profitAndLoss = await getProfitAndLossReport(fromDate, toDate);
+        report.profitAndLoss = await getProfitAndLossReport(tenantId, fromDate, toDate);
         break;
       case 'balance-sheet':
-        report.balanceSheet = await getBalanceSheet(toDate);
+        report.balanceSheet = await getBalanceSheet(tenantId, toDate);
         break;
       case 'cash-flow':
-        report.cashFlow = await getCashFlowReport(fromDate, toDate);
+        report.cashFlow = await getCashFlowReport(tenantId, fromDate, toDate);
         break;
       case 'inventory':
-        report.inventory = await getInventoryValuation();
+        report.inventory = await getInventoryValuation(tenantId);
         break;
       case 'summary':
       default:
         report = {
-          profitAndLoss: await getProfitAndLossReport(fromDate, toDate),
-          balanceSheet: await getBalanceSheet(toDate),
-          cashFlow: await getCashFlowReport(fromDate, toDate),
-          inventory: await getInventoryValuation(),
+          profitAndLoss: await getProfitAndLossReport(tenantId, fromDate, toDate),
+          balanceSheet: await getBalanceSheet(tenantId, toDate),
+          cashFlow: await getCashFlowReport(tenantId, fromDate, toDate),
+          inventory: await getInventoryValuation(tenantId),
         };
         break;
     }
 
-    return apiSuccess(report, 'Report fetched successfully');
+    return apiSuccess(report, 'تم جلب التقرير بنجاح');
   } catch (error) {
     return handleApiError(error, 'Generate report');
   }

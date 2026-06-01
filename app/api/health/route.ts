@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { logger, createRequestLogger } from '@/lib/logger';
 import { extractRequestMeta } from '@/lib/api/safe-response';
+import { getMemoryHealth } from '@/lib/health-memory';
 
 // Disable caching for health checks
 export const dynamic = 'force-dynamic';
@@ -42,16 +43,13 @@ export async function GET(request: Request) {
 
   // Memory usage check
   try {
-    const memUsage = process.memoryUsage();
-    const heapUsedMB = memUsage.heapUsed / 1024 / 1024;
-    const heapTotalMB = memUsage.heapTotal / 1024 / 1024;
-    const heapUsagePercent = (heapUsedMB / heapTotalMB) * 100;
+    const memory = getMemoryHealth();
 
     checks.push({
       name: 'memory',
-      status: heapUsagePercent < 85 ? 'healthy' : 'degraded',
+      status: memory.status,
       duration: 0,
-      message: `${heapUsedMB.toFixed(2)}MB / ${heapTotalMB.toFixed(2)}MB (${heapUsagePercent.toFixed(1)}%)`,
+      message: memory.message,
     });
   } catch (error) {
     checks.push({

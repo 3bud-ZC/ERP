@@ -1,5 +1,5 @@
 import { customerRepo } from '@/lib/repositories/customer.repo';
-import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service';
+import { CODE_ENTITY_KEYS, allocateEntityCode } from '@/lib/code-sequence.service';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
@@ -45,13 +45,13 @@ export async function POST(request: Request) {
     }
     
     // Remove tenantId from body if present - will be set from user context
-    const { tenantId, ...customerData } = body;
-    
-    const code = await resolveEntityCode(
-      customerData.code,
-      CODE_ENTITY_KEYS.CUSTOMER,
-      user.tenantId,
-    );
+    const { tenantId, code: _ignoredCode, ...customerData } = body;
+
+    if (!customerData.nameAr || typeof customerData.nameAr !== 'string' || !customerData.nameAr.trim()) {
+      return apiError('الاسم بالعربية مطلوب', 400);
+    }
+
+    const code = await allocateEntityCode(CODE_ENTITY_KEYS.CUSTOMER, user.tenantId);
 
     const customer = await customerRepo.create({
       code,
@@ -96,7 +96,7 @@ export async function PUT(request: Request) {
     }
 
     const body = await request.json();
-    const { id, ...data } = body;
+    const { id, code: _ignoredCode, ...data } = body;
 
     // SECURITY: Verify customer belongs to user's tenant
     const existingCustomer = await customerRepo.findByIdAndTenant(id, user.tenantId!);
@@ -104,7 +104,8 @@ export async function PUT(request: Request) {
       return apiError('العميل غير موجود', 404);
     }
 
-    const customer = await customerRepo.update(id, data);
+    const { code: _c, ...safeData } = data as Record<string, unknown>;
+    const customer = await customerRepo.update(id, safeData);
 
     await logAuditAction(
       user.id,

@@ -110,6 +110,58 @@ export async function getAvailableStockInTx(
   return Math.max(0, (product?.stock ?? 0) - res);
 }
 
+/**
+ * Legacy data safeguard:
+ * Some tenants have product.stock populated while warehouseStock row is missing.
+ * This seeds a missing row from product.stock for the product default warehouse only.
+ */
+export async function ensureWarehouseStockSeededFromProductInTx(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  productId: string,
+  warehouseId: string,
+): Promise<void> {
+  const existing = await tx.warehouseStock.findUnique({
+    where: {
+      tenantId_productId_warehouseId: { tenantId, productId, warehouseId },
+    },
+    select: { id: true, quantity: true },
+  });
+
+  const product = await tx.product.findFirst({
+    where: { id: productId, tenantId },
+    select: { warehouseId: true, stock: true },
+  });
+  if (!product || product.warehouseId !== warehouseId) return;
+  if ((product.stock ?? 0) <= 0) return;
+
+  if (existing) {
+    if ((existing.quantity ?? 0) > 0) return;
+    const agg = await tx.warehouseStock.aggregate({
+      where: { tenantId, productId },
+      _sum: { quantity: true },
+    });
+    const totalWhQty = agg._sum.quantity ?? 0;
+    if (totalWhQty <= 0) {
+      await tx.warehouseStock.update({
+        where: { id: existing.id },
+        data: { quantity: product.stock },
+      });
+    }
+    return;
+  }
+
+  await tx.warehouseStock.create({
+    data: {
+      tenantId,
+      productId,
+      warehouseId,
+      quantity: product.stock,
+      reservedQty: 0,
+    },
+  });
+}
+
 export async function getAvailableStock(
   tenantId: string,
   productId: string,

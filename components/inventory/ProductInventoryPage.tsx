@@ -2,7 +2,8 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
+import { matchesEntitySearch } from '@/lib/api/safe-array';
 import { queryKeys } from '@/lib/api/query-keys';
 import {
   Plus,
@@ -91,6 +92,10 @@ function fmtEGP(v?: number | null) {
   );
 }
 
+function safeNumber(v?: number | null) {
+  return Number(v ?? 0);
+}
+
 function marginPct(price: number, cost: number): number | null {
   if (!price || price <= 0) return null;
   return ((price - cost) / price) * 100;
@@ -103,7 +108,7 @@ export function ProductInventoryPage({ kind }: { kind: ProductInventoryKind }) {
 
   const productsQ = useQuery({
     queryKey: queryKeys.products(kind),
-    queryFn: () => apiGet<Product[]>(`/api/products?type=${kind}`),
+    queryFn: () => apiGetList<Product>(`/api/products?type=${kind}`),
     staleTime: 0,
   });
 
@@ -119,7 +124,7 @@ export function ProductInventoryPage({ kind }: { kind: ProductInventoryKind }) {
 
   const warehousesQ = useQuery({
     queryKey: queryKeys.warehouses,
-    queryFn: () => apiGet<WarehouseLite[]>('/api/warehouses'),
+    queryFn: () => apiGetList<WarehouseLite>('/api/warehouses'),
     staleTime: 60_000,
   });
 
@@ -155,12 +160,8 @@ export function ProductInventoryPage({ kind }: { kind: ProductInventoryKind }) {
 
   const filtered = useMemo(
     () =>
-      products.filter(
-        p =>
-          !search ||
-          p.nameAr.includes(search) ||
-          (p.nameEn || '').toLowerCase().includes(search.toLowerCase()) ||
-          p.code.toLowerCase().includes(search.toLowerCase()),
+      products.filter((p) =>
+        matchesEntitySearch(search, [p.nameAr, p.nameEn, p.code]),
       ),
     [products, search],
   );
@@ -172,10 +173,10 @@ export function ProductInventoryPage({ kind }: { kind: ProductInventoryKind }) {
     for (const p of products) {
       const v = valuationByProduct.get(p.id);
       const avg = v?.averageCost ?? p.cost ?? 0;
-      const qty = p.stock ?? 0;
+      const qty = safeNumber(p.stock);
       totalQty += qty;
       stockValue += v?.totalValue ?? qty * avg;
-      const threshold = p.minStock ?? 0;
+      const threshold = safeNumber(p.minStock);
       if (threshold > 0 && qty <= threshold) lowStock++;
     }
     return { count: products.length, stockValue, lowStock, totalQty };
@@ -221,7 +222,7 @@ export function ProductInventoryPage({ kind }: { kind: ProductInventoryKind }) {
       toolbar={
         <Link
           href={`${cfg.basePath}/new`}
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium"
+          className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium"
         >
           <Plus className="w-4 h-4" /> {cfg.newLabel}
         </Link>
@@ -240,7 +241,7 @@ export function ProductInventoryPage({ kind }: { kind: ProductInventoryKind }) {
         />
         <KpiCard
           title="إجمالي الكميات"
-          value={stats.totalQty.toLocaleString('ar-EG')}
+          value={safeNumber(stats.totalQty).toLocaleString('ar-EG')}
           icon={kind === 'raw_material' ? Truck : Factory}
           color="blue"
         />
@@ -259,7 +260,7 @@ export function ProductInventoryPage({ kind }: { kind: ProductInventoryKind }) {
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="بحث بالاسم أو الرمز…"
-          className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
         />
         {search && (
           <button
@@ -350,21 +351,22 @@ function RawMaterialsTable({
         <tbody className="divide-y divide-slate-100">
           {rows.map(p => {
             const v = valuationByProduct.get(p.id);
-            const avg = v?.averageCost ?? p.cost;
-            const value = v?.totalValue ?? p.stock * avg;
-            const lowStock = p.stock <= (p.minStock ?? 0);
+            const avg = v?.averageCost ?? p.cost ?? 0;
+            const stock = safeNumber(p.stock);
+            const value = v?.totalValue ?? stock * avg;
+            const lowStock = stock <= safeNumber(p.minStock);
             return (
               <tr key={p.id} className={`hover:bg-slate-50 ${lowStock ? 'bg-red-50/30' : ''}`}>
                 <td className="px-5 py-3 text-sm font-mono text-slate-500">{p.code}</td>
                 <td className="px-5 py-3 text-sm font-medium text-slate-900">{p.nameAr}</td>
                 <td className="px-5 py-3 text-sm font-semibold text-left tabular-nums">
-                  {p.stock.toLocaleString('ar-EG')} {p.unit ?? ''}
+                  {stock.toLocaleString('ar-EG')} {p.unit ?? ''}
                   {lowStock && (
                     <AlertTriangle className="w-3 h-3 inline mr-1 text-red-600" />
                   )}
                 </td>
                 <td className="px-5 py-3 text-sm text-slate-500 text-left tabular-nums">
-                  {p.minStock != null ? p.minStock.toLocaleString('ar-EG') : '—'}
+                  {p.minStock != null ? safeNumber(p.minStock).toLocaleString('ar-EG') : '—'}
                 </td>
                 <td className="px-5 py-3 text-sm text-left tabular-nums">{fmtEGP(avg)}</td>
                 <td className="px-5 py-3 text-sm text-left tabular-nums font-medium">
@@ -416,9 +418,10 @@ function FinishedProductsTable({
         <tbody className="divide-y divide-slate-100">
           {rows.map(p => {
             const v = valuationByProduct.get(p.id);
-            const cost = v?.averageCost ?? p.cost;
-            const margin = marginPct(p.price, cost);
-            const lowStock = p.stock <= (p.minStock ?? 0);
+            const cost = v?.averageCost ?? p.cost ?? 0;
+            const stock = safeNumber(p.stock);
+            const margin = marginPct(p.price ?? 0, cost);
+            const lowStock = stock <= safeNumber(p.minStock);
             return (
               <tr key={p.id} className={`hover:bg-slate-50 ${lowStock ? 'bg-red-50/30' : ''}`}>
                 <td className="px-5 py-3 text-sm font-mono text-slate-500">{p.code}</td>
@@ -426,13 +429,13 @@ function FinishedProductsTable({
                   {p.nameAr}
                   <Link
                     href={`/manufacturing/production-orders?productId=${p.id}`}
-                    className="block text-xs text-indigo-600 hover:underline mt-0.5"
+                    className="block text-xs text-slate-700 hover:underline mt-0.5"
                   >
                     أوامر الإنتاج
                   </Link>
                 </td>
                 <td className="px-5 py-3 text-sm font-semibold text-left tabular-nums">
-                  {p.stock.toLocaleString('ar-EG')}
+                  {stock.toLocaleString('ar-EG')}
                 </td>
                 <td className="px-5 py-3 text-sm text-left tabular-nums">{fmtEGP(cost)}</td>
                 <td className="px-5 py-3 text-sm font-medium text-left tabular-nums">
@@ -484,7 +487,7 @@ function RowActions({
     <div className="flex items-center justify-center gap-1.5">
       <Link
         href={`${basePath}/${id}/edit`}
-        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+        className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
         title="تعديل"
       >
         <Pencil className="w-4 h-4" />

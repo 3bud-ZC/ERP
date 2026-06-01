@@ -1,7 +1,7 @@
-import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
-import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
+import { getAuthenticatedUser } from '@/lib/auth';
+import { hasReportAccess } from '@/lib/reports/report-access';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
@@ -12,26 +12,27 @@ export async function GET(request: Request) {
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
-    if (!checkPermission(user, 'view_financial_reports')) return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
+    if (!hasReportAccess(user, 'aging')) return apiError('ليس لديك صلاحية لعرض تقرير الأعمار', 403);
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
     const { searchParams } = new URL(request.url);
-    const type = searchParams.get('type') || 'ar'; // 'ar' for Accounts Receivable, 'ap' for Accounts Payable
+    const type = searchParams.get('type') || 'ar';
     const asOfDate = searchParams.get('asOfDate') ? new Date(searchParams.get('asOfDate')!) : new Date();
 
     if (type !== 'ar' && type !== 'ap') {
-      return apiError('Type must be either "ar" or "ap"', 400);
+      return apiError('نوع التقرير غير صحيح', 400);
     }
+    const tenantId = user.tenantId;
 
-    // Get all posted journal entries up to the as-of date
     const journalEntries = await prisma.journalEntry.findMany({
       where: {
+        tenantId,
         isPosted: true,
         entryDate: { lte: asOfDate },
       },
       include: { lines: true },
     });
 
-    // Calculate balances by customer or supplier
     const balances = new Map<string, any>();
 
     journalEntries.forEach((entry: any) => {
@@ -40,15 +41,14 @@ export async function GET(request: Request) {
         const debit = Number(line.debit);
         const credit = Number(line.credit);
 
-        // AR: Account 1021 (Accounts Receivable)
-        // AP: Account 2011 (Accounts Payable)
         const isAR = accountCode === '1021';
         const isAP = accountCode === '2011';
 
         if ((type === 'ar' && isAR) || (type === 'ap' && isAP)) {
           const netAmount = isAR ? debit - credit : credit - debit;
           const entityId = entry.referenceId;
-          
+          if (!entityId) return;
+
           if (!balances.has(entityId)) {
             balances.set(entityId, {
               entityId,
@@ -69,7 +69,6 @@ export async function GET(request: Request) {
       });
     });
 
-    // Calculate aging buckets
     const agingBuckets = {
       current: 0,
       '1-30': 0,
@@ -83,28 +82,35 @@ export async function GET(request: Request) {
     const now = asOfDate;
     const oneDay = 24 * 60 * 60 * 1000;
 
+    const entityIds = Array.from(balances.keys());
+    const customerMap = new Map<string, { id: string; code: string; nameAr: string | null; nameEn: string | null }>();
+    const supplierMap = new Map<string, { id: string; code: string; nameAr: string | null; nameEn: string | null }>();
+
+    if (type === 'ar' && entityIds.length > 0) {
+      const customers = await prisma.customer.findMany({
+        where: { tenantId, id: { in: entityIds } },
+        select: { id: true, code: true, nameAr: true, nameEn: true },
+      });
+      customers.forEach((c) => customerMap.set(c.id, c));
+    }
+
+    if (type === 'ap' && entityIds.length > 0) {
+      const suppliers = await prisma.supplier.findMany({
+        where: { tenantId, id: { in: entityIds } },
+        select: { id: true, code: true, nameAr: true, nameEn: true },
+      });
+      suppliers.forEach((s) => supplierMap.set(s.id, s));
+    }
+
     const balanceEntries = Array.from(balances.entries());
     for (let i = 0; i < balanceEntries.length; i++) {
       const [entityId, data] = balanceEntries[i];
-      if (data.balance <= 0) continue; // Skip zero or negative balances
+      if (data.balance <= 0) continue;
 
-      // Get entity details
-      let entity;
-      if (type === 'ar') {
-        entity = await prisma.customer.findUnique({
-          where: { id: entityId },
-          select: { id: true, code: true, nameAr: true, nameEn: true },
-        });
-      } else {
-        entity = await prisma.supplier.findUnique({
-          where: { id: entityId },
-          select: { id: true, code: true, nameAr: true, nameEn: true },
-        });
-      }
+      const entity = type === 'ar' ? customerMap.get(entityId) : supplierMap.get(entityId);
 
       if (!entity) continue;
 
-      // Calculate aging based on oldest transaction
       const oldestTransaction = data.transactions
         .filter((t: any) => t.amount > 0)
         .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())[0];
@@ -142,7 +148,7 @@ export async function GET(request: Request) {
 
     return apiSuccess(
       {
-        type: type === 'ar' ? 'Accounts Receivable' : 'Accounts Payable',
+        type: type === 'ar' ? 'الحسابات المدينة' : 'الحسابات الدائنة',
         asOfDate,
         summary: {
           totalOutstanding,
@@ -150,9 +156,9 @@ export async function GET(request: Request) {
         },
         details: details.sort((a, b) => b.balance - a.balance),
       },
-      'Aging report generated successfully'
+      'تم إنشاء تقرير الأعمار بنجاح'
     );
   } catch (error) {
-    return handleApiError(error, 'Generate aging report');
+    return handleApiError(error, 'Aging report');
   }
 }

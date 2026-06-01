@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { Plus, Pencil, Trash2, GitBranch, CheckCircle, XCircle } from 'lucide-react';
 import { CardGridSkeleton, EmptyState, ErrorBanner, Toast, useToast } from '@/components/ui/patterns';
 import { ManufacturingLayout } from '@/components/manufacturing/ManufacturingLayout';
@@ -23,11 +23,11 @@ export default function ProductionLinesPage() {
   const qc = useQueryClient();
   const [toast, showToast] = useToast();
 
-  const linesQ = useQuery({
-    queryKey: ['production-lines'],
-    queryFn:  () => apiGet<ProductionLine[]>('/api/production-lines'),
-    staleTime: 60_000,
-  });
+    const linesQ = useQuery({
+      queryKey: ['production-lines'],
+      queryFn:  () => apiGetList<ProductionLine>('/api/production-lines'),
+      staleTime: 10_000,
+    });
   const lines = useMemo(() => linesQ.data ?? [], [linesQ.data]);
   const loading = linesQ.isLoading;
   const error   = linesQ.error ? (linesQ.error as Error).message : null;
@@ -61,7 +61,7 @@ export default function ProductionLinesPage() {
       subtitle={loading ? 'جاري التحميل…' : `${lines.length} خط`}
       toolbar={
         <Link href="/manufacturing/production-lines/new"
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium">
+          className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium">
           <Plus className="w-4 h-4" /> خط جديد
         </Link>
       }
@@ -98,7 +98,7 @@ export default function ProductionLinesPage() {
                     </span>
                   )}
                   <Link href={`/manufacturing/production-lines/${l.id}/edit`}
-                    className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="تعديل">
+                    className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors" title="تعديل">
                     <Pencil className="w-4 h-4" />
                   </Link>
                   <button onClick={() => { setDeleteId(l.id); setDeleteError(null); }}
@@ -119,7 +119,7 @@ export default function ProductionLinesPage() {
                   </div>
                 )}
                 {l.productionOrders && l.productionOrders.length > 0 && (
-                  <div className="text-blue-600">
+                  <div className="text-emerald-700">
                     {l.productionOrders.length} أمر نشط الآن
                   </div>
                 )}

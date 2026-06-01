@@ -4,7 +4,8 @@
 
 import { Prisma } from '@prisma/client';
 import type { PostingProfile } from '@/lib/services/accounting-posting-profile.service';
-import { assertCanPostReference } from '@/lib/services/posting-guard.service';
+import { assertJournalEntryCanPost } from '@/lib/services/posting-guard.service';
+import { chartOfAccounts } from '@/lib/accounting';
 
 export const INVOICE_ACCOUNTS = {
   CASH: '1001',
@@ -34,6 +35,27 @@ const DEFAULT_PROFILE: PostingProfile = {
 
 function resolveProfile(profile?: PostingProfile): PostingProfile {
   return profile ?? DEFAULT_PROFILE;
+}
+
+async function ensureChartOfAccountsInTransaction(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+): Promise<void> {
+  for (const [code, account] of Object.entries(chartOfAccounts)) {
+    await tx.account.upsert({
+      where: { tenantId_code: { tenantId, code } },
+      update: {},
+      create: {
+        code,
+        nameAr: account.nameAr,
+        nameEn: account.nameEn,
+        type: account.type,
+        subType: account.subType,
+        isActive: true,
+        tenantId,
+      },
+    });
+  }
 }
 
 export interface JournalLineDraft {
@@ -228,25 +250,14 @@ export async function postJournalLinesInTransaction(
     correlationId?: string;
   },
 ): Promise<{ id: string }> {
-  if (!params.referenceType || !params.referenceId) {
-    throw new Error('Journal entry reference type and id are required');
-  }
+  await ensureChartOfAccountsInTransaction(tx, params.tenantId);
 
-  await assertCanPostReference(tx, params.tenantId, params.referenceType, params.referenceId);
-
-  if (params.correlationId) {
-    const existingCorrelation = await tx.journalEntry.findFirst({
-      where: {
-        tenantId: params.tenantId,
-        correlationId: params.correlationId,
-        isPosted: true,
-      },
-      select: { id: true },
-    });
-    if (existingCorrelation) {
-      throw new Error('Duplicate journal entry correlation id detected');
-    }
-  }
+  await assertJournalEntryCanPost(tx, {
+    tenantId: params.tenantId,
+    referenceType: params.referenceType,
+    referenceId: params.referenceId,
+    correlationId: params.correlationId,
+  });
 
   const { nextEntityCode, CODE_ENTITY_KEYS } = await import('@/lib/code-sequence.service');
   const entryNumber = await nextEntityCode(CODE_ENTITY_KEYS.JOURNAL_ENTRY, params.tenantId, tx);

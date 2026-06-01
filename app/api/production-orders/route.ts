@@ -10,6 +10,7 @@ import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service
 import {
   executeCreateProductionOrder,
   executeApproveProductionOrder,
+  executeCancelProductionOrder,
   executeCompleteProductionOrder,
   executeDeleteProductionOrder,
   mapProductionError,
@@ -247,6 +248,35 @@ export async function PUT(request: Request) {
           userAgent: request.headers.get('user-agent') || undefined,
         });
         return apiSuccess(updated, 'Production order completed successfully');
+      } catch (error) {
+        if (error instanceof InvoiceExecutionError) {
+          const mapped = mapProductionError(error);
+          return apiError(mapped.body.error, mapped.status, mapped.body);
+        }
+        throw error;
+      }
+    }
+
+    if (status === 'cancelled' && order.status !== 'cancelled') {
+      try {
+        const updated = await executeCancelProductionOrder({
+          tenantId: user.tenantId,
+          userId: user.id,
+          productionOrderId: id,
+        });
+        await recordAuditTrail({
+          userId: user.id,
+          tenantId: user.tenantId,
+          module: 'manufacturing',
+          entity: 'ProductionOrder',
+          entityId: id,
+          action: 'CANCEL',
+          before: order,
+          after: updated,
+          ip: request.headers.get('x-forwarded-for') || undefined,
+          userAgent: request.headers.get('user-agent') || undefined,
+        });
+        return apiSuccess(updated, 'Production order cancelled and reversed');
       } catch (error) {
         if (error instanceof InvoiceExecutionError) {
           const mapped = mapProductionError(error);

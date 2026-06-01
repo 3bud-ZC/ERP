@@ -153,15 +153,20 @@ function printSystemReport(report) {
 }
 
 function startNextServer() {
-  const nextBin = path.join(process.cwd(), 'node_modules', '.bin', 'next');
-  
-  const child = spawn('node', [nextBin, 'start'], {
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      NODE_ENV: 'production',
-    },
-  });
+  const fs = require('fs');
+  const standaloneDir = path.join(process.cwd(), '.next', 'standalone');
+  const standaloneServer = path.join(standaloneDir, 'server.js');
+  const port = process.env.PORT || '3000';
+  const env = { ...process.env, NODE_ENV: 'production', PORT: port };
+
+  const useStandalone = fs.existsSync(standaloneServer);
+  const child = useStandalone
+    ? spawn('node', ['server.js'], { stdio: 'inherit', env, cwd: standaloneDir })
+    : spawn('node', [path.join(process.cwd(), 'node_modules', 'next', 'dist', 'bin', 'next'), 'start', '-p', port], {
+        stdio: 'inherit',
+        env,
+        cwd: process.cwd(),
+      });
 
   child.on('error', (err) => {
     log(`❌ Failed to start Next.js: ${err.message}`, 'red');

@@ -6,7 +6,7 @@ export const revalidate = 0;
 
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
-import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service';
+import { CODE_ENTITY_KEYS, allocateEntityCode } from '@/lib/code-sequence.service';
 
 export async function GET(request: Request) {
   try {
@@ -15,13 +15,17 @@ export async function GET(request: Request) {
       return apiError('لم يتم المصادقة', 401);
     }
 
+    if (!user.tenantId) {
+      return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
+    }
+
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search')?.trim() || '';
     const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') ?? '50', 10)));
     const skip = (page - 1) * limit;
 
-    const { data } = await warehouseRepo.listByTenant(user.tenantId!, {
+    const { data } = await warehouseRepo.listByTenant(user.tenantId, {
       search,
       skip,
       take: limit,
@@ -51,7 +55,6 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const code = body.code?.toString().trim();
     const nameAr = body.nameAr?.toString().trim();
     const nameEn = body.nameEn?.toString().trim() || null;
     const address = body.address?.toString().trim() || null;
@@ -66,11 +69,7 @@ export async function POST(request: Request) {
       return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
-    const resolvedCode = await resolveEntityCode(
-      code,
-      CODE_ENTITY_KEYS.WAREHOUSE,
-      user.tenantId,
-    );
+    const resolvedCode = await allocateEntityCode(CODE_ENTITY_KEYS.WAREHOUSE, user.tenantId);
 
     const warehouse = await warehouseRepo.create({
       code: resolvedCode,
@@ -114,25 +113,33 @@ export async function PUT(request: Request) {
     }
 
     const body = await request.json();
-    const { id } = body;
-    const code = body.code?.toString().trim();
-    const nameAr = body.nameAr?.toString().trim();
-    const nameEn = body.nameEn?.toString().trim() || null;
-    const address = body.address?.toString().trim() || null;
-    const phone = body.phone?.toString().trim() || null;
-    const manager = body.manager?.toString().trim() || null;
+    const { id, code: _ignoredCode, ...rest } = body;
+    const nameAr = rest.nameAr?.toString().trim();
+    const nameEn = rest.nameEn?.toString().trim() || null;
+    const address = rest.address?.toString().trim() || null;
+    const phone = rest.phone?.toString().trim() || null;
+    const manager = rest.manager?.toString().trim() || null;
 
     if (!id) {
       return handleApiError(new Error('id مطلوب'), 'Update warehouse');
-    }
-    if (!code) {
-      return handleApiError(new Error('الكود مطلوب'), 'Update warehouse');
     }
     if (!nameAr) {
       return handleApiError(new Error('الاسم العربي مطلوب'), 'Update warehouse');
     }
 
-    const warehouse = await warehouseRepo.update(id, { code, nameAr, nameEn, address, phone, manager });
+    const existing = await warehouseRepo.findById(id);
+    if (!existing || existing.tenantId !== user.tenantId) {
+      return apiError('المخزن غير موجود', 404);
+    }
+
+    const warehouse = await warehouseRepo.update(id, {
+      code: existing.code,
+      nameAr,
+      nameEn,
+      address,
+      phone,
+      manager,
+    });
 
     await logAuditAction(
       user.id,
@@ -140,7 +147,7 @@ export async function PUT(request: Request) {
       'inventory',
       'Warehouse',
       warehouse.id,
-      { data: { code, nameAr, nameEn, address, phone, manager } },
+      { data: { code: existing.code, nameAr, nameEn, address, phone, manager } },
       request.headers.get('x-forwarded-for') || undefined,
       request.headers.get('user-agent') || undefined
     );

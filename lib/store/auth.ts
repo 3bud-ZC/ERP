@@ -47,7 +47,13 @@ export const useAuthStore = create<AuthState>()(
         const data = await response.json();
         const { id, email: userEmail, name, roles, permissions } = data.data;
         set({
-          user: { id, email: userEmail, name, roles, permissions },
+          user: {
+            id,
+            email: userEmail,
+            name,
+            roles: Array.isArray(roles) ? roles : [],
+            permissions: Array.isArray(permissions) ? permissions : [],
+          },
           token: null,
           isAuthenticated: true,
         });

@@ -10,7 +10,7 @@ const STATUS_STYLES: Record<string, string> = {
   partial: 'bg-sky-50 text-sky-800 border-sky-200',
   unpaid: 'bg-orange-50 text-orange-800 border-orange-200',
   cancelled: 'bg-red-50 text-red-700 border-red-200',
-  reversed: 'bg-purple-50 text-purple-800 border-purple-200',
+  reversed: 'bg-cyan-50 text-cyan-800 border-cyan-200',
   credited: 'bg-violet-50 text-violet-800 border-violet-200',
   approved: 'bg-emerald-50 text-emerald-800 border-emerald-200',
 };

@@ -1,3 +1,5 @@
+import { asArray } from './safe-array';
+
 /**
  * Thin fetch wrapper for use with TanStack Query.
  * - Honors existing API contract: { success, data, message?, error?, meta? }
@@ -36,12 +38,16 @@ export async function apiFetch<T = unknown>(
   url: string,
   init?: RequestInit
 ): Promise<T> {
+  const method = (init?.method || 'GET').toUpperCase();
   const res = await fetch(url, {
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers || {}),
     },
+    // Operational ERP screens must always reflect the latest committed data.
+    // Keep explicit caller override if provided.
+    ...(method === 'GET' && init?.cache === undefined ? { cache: 'no-store' as RequestCache } : {}),
     ...init,
   });
 
@@ -70,6 +76,12 @@ export async function apiFetch<T = unknown>(
 export function apiGet<T = unknown>(url: string) {
   return apiFetch<T>(url, { method: 'GET' });
 }
+
+/** GET list endpoints — always returns an array (never crashes .map on bad payloads). */
+export function apiGetList<T = unknown>(url: string) {
+  return apiGet<unknown>(url).then((data) => asArray<T>(data));
+}
+
 export function apiPost<T = unknown>(url: string, body?: unknown) {
   return apiFetch<T>(url, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
 }

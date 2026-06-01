@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import {
   ReportShell, ReportLabel, reportInputCls, fmtMoneyEGP, ReportSummaryCard,
@@ -32,7 +32,7 @@ export default function InventoryReportPage() {
 
   const productsQ = useQuery({
     queryKey: ['products'],
-    queryFn:  () => apiGet<ProductLite[]>('/api/products'),
+    queryFn:  () => apiGetList<ProductLite>('/api/products'),
     staleTime: 60_000,
   });
   const products = useMemo(() => productsQ.data ?? [], [productsQ.data]);
@@ -70,6 +70,7 @@ export default function InventoryReportPage() {
         title="تقرير المخازن"
         subtitle="أرصدة المخزون والقيمة الكلية"
         periodLabel={`بتاريخ ${new Date().toLocaleDateString('ar-EG')}`}
+        exportConfig={{ report: 'inventory', params: { type: typeFilter, status: statusFilter } }}
         loading={productsQ.isLoading}
         error={productsQ.error ? (productsQ.error as Error).message : null}
         filters={
@@ -93,7 +94,7 @@ export default function InventoryReportPage() {
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <ReportSummaryCard label="عدد المنتجات" value={summary.totalProducts} />
-          <ReportSummaryCard label="قيمة المخزون" value={fmtMoneyEGP(summary.totalValue)} accent="bg-blue-50 border-blue-200" />
+          <ReportSummaryCard label="قيمة المخزون" value={fmtMoneyEGP(summary.totalValue)} accent="bg-emerald-50 border-emerald-200" />
           <ReportSummaryCard label="منخفض المخزون" value={summary.lowStock} accent="bg-amber-50 border-amber-200" />
           <ReportSummaryCard label="نافد" value={summary.outOfStock} accent="bg-red-50 border-red-200" />
         </div>

@@ -10,9 +10,17 @@ import {
   postJournalLinesInTransaction,
 } from '@/lib/services/invoice-accounting.service';
 import { getPostingProfile } from '@/lib/services/accounting-posting-profile.service';
-import { getInvoiceOutstanding } from '@/lib/services/party-balance.service';
-import { reverseJournalEntriesInTx } from '@/lib/services/journal-reversal.service';
-import { assertCanPostReference } from '@/lib/services/posting-guard.service';
+import {
+  getInvoiceOutstanding,
+  getInvoiceOutstandingInTx,
+} from '@/lib/services/party-balance.service';
+import {
+  reverseAllJournalEntriesForReferenceId,
+} from '@/lib/services/journal-reversal.service';
+import {
+  recordCashboxTransactionInTx,
+  reverseCashboxTransactionsInTx,
+} from '@/lib/services/cashbox.service';
 
 export class PaymentExecutionError extends Error {
   constructor(message: string) {
@@ -131,12 +139,117 @@ async function rollbackAllocationsInTx(
   await tx.paymentAllocation.deleteMany({ where: { paymentId } });
 }
 
+async function assertAllocationsWithinOutstandingInTx(
+  tx: Prisma.TransactionClient,
+  allocations: PaymentAllocationInput[],
+): Promise<void> {
+  for (const alloc of allocations) {
+    const outstanding = await getInvoiceOutstandingInTx(
+      tx,
+      alloc.invoiceType,
+      alloc.invoiceId,
+    );
+    if (alloc.amount > outstanding + 0.01) {
+      throw new PaymentExecutionError(
+        `المبلغ المخصص ${alloc.amount} يتجاوز المتبقي ${outstanding.toFixed(2)}`,
+      );
+    }
+  }
+}
+
+export async function createPaymentInTx(
+  tx: Prisma.TransactionClient,
+  params: {
+    tenantId: string;
+    userId: string;
+    amount: number;
+    date: Date;
+    type: 'incoming' | 'outgoing';
+    cashboxId: string;
+    customerId?: string;
+    supplierId?: string;
+    salesInvoiceId?: string;
+    purchaseInvoiceId?: string;
+    notes?: string;
+    allocations: PaymentAllocationInput[];
+  },
+) {
+  const { tenantId, userId, amount, date, type } = params;
+  if (amount <= 0) throw new PaymentExecutionError('المبلغ يجب أن يكون أكبر من صفر');
+  if (!params.cashboxId) throw new PaymentExecutionError('يجب اختيار الخزنة عند تسجيل مبلغ مدفوع');
+  if (!params.allocations.length) throw new PaymentExecutionError('يجب ربط الدفعة بفاتورة واحدة على الأقل');
+
+  const allocSum = params.allocations.reduce((s, a) => s + a.amount, 0);
+  if (Math.abs(allocSum - amount) > 0.02) {
+    throw new PaymentExecutionError('إجمالي المبالغ المخصصة يجب أن يساوي مبلغ الدفعة');
+  }
+
+  await assertAllocationsWithinOutstandingInTx(tx, params.allocations);
+
+  const payment = await tx.payment.create({
+    data: {
+      amount,
+      date,
+      type,
+      customerId: params.customerId,
+      supplierId: params.supplierId,
+      salesInvoiceId: params.salesInvoiceId,
+      purchaseInvoiceId: params.purchaseInvoiceId,
+      cashboxId: params.cashboxId,
+      notes: params.notes,
+      tenantId,
+    },
+  });
+
+  await applyAllocationsInTx(tx, {
+    tenantId,
+    userId,
+    paymentId: payment.id,
+    allocations: params.allocations,
+  });
+
+  await recordCashboxTransactionInTx(tx, {
+    tenantId,
+    cashboxId: params.cashboxId,
+    type: type === 'incoming' ? 'sales_receipt' : 'purchase_payment',
+    direction: type === 'incoming' ? 'in' : 'out',
+    amount,
+    date,
+    referenceType: PAYMENT_REF,
+    referenceId: payment.id,
+    description: params.notes || (type === 'incoming' ? 'تحصيل فاتورة مبيعات' : 'سداد فاتورة مشتريات'),
+    createdBy: userId,
+  });
+
+  const journalEntryId = await postPaymentJournalInTx(tx, {
+    tenantId,
+    userId,
+    paymentId: payment.id,
+    amount,
+    type,
+    date,
+  });
+
+  return {
+    payment: await tx.payment.findUniqueOrThrow({
+      where: { id: payment.id },
+      include: { allocations: true },
+    }),
+    journalEntry: { id: journalEntryId },
+  };
+}
+
 export async function reversePaymentInTx(
   tx: Prisma.TransactionClient,
   tenantId: string,
   paymentId: string,
 ): Promise<void> {
-  await reverseJournalEntriesInTx(tx, tenantId, PAYMENT_REF, paymentId);
+  await reverseAllJournalEntriesForReferenceId(tx, tenantId, paymentId, PAYMENT_REF);
+  await reverseCashboxTransactionsInTx(tx, {
+    tenantId,
+    referenceType: PAYMENT_REF,
+    referenceId: paymentId,
+  });
   await rollbackAllocationsInTx(tx, paymentId);
   await tx.payment.update({
     where: { id: paymentId },
@@ -156,7 +269,7 @@ async function postPaymentJournalInTx(
   },
 ): Promise<string> {
   const profile = await getPostingProfile(params.tenantId);
-  await assertCanPostReference(tx, params.tenantId, PAYMENT_REF, params.paymentId);
+  const correlationId = `${params.paymentId}:post`;
 
   const jeLines = buildPaymentJournalLines(
     {
@@ -176,7 +289,7 @@ async function postPaymentJournalInTx(
     referenceType: PAYMENT_REF,
     referenceId: params.paymentId,
     lines: jeLines,
-    correlationId: `${params.paymentId}:post`,
+    correlationId,
   });
 
   await tx.payment.update({
@@ -201,12 +314,14 @@ export async function executeCreatePayment(params: {
   supplierId?: string;
   salesInvoiceId?: string;
   purchaseInvoiceId?: string;
+  cashboxId?: string;
   notes?: string;
   allocations?: PaymentAllocationInput[];
 }) {
   const { tenantId, userId, amount, date, type } = params;
 
-  if (amount <= 0) throw new PaymentExecutionError('Amount must be positive');
+  if (amount <= 0) throw new PaymentExecutionError('المبلغ يجب أن يكون أكبر من صفر');
+  if (!params.cashboxId) throw new PaymentExecutionError('يجب اختيار الخزنة عند تسجيل مبلغ مدفوع');
 
   const allocations: PaymentAllocationInput[] = params.allocations?.length
     ? params.allocations
@@ -217,56 +332,39 @@ export async function executeCreatePayment(params: {
         : [];
 
   if (allocations.length === 0) {
-    throw new PaymentExecutionError('Payment must be linked to at least one invoice');
+    throw new PaymentExecutionError('يجب ربط الدفعة بفاتورة واحدة على الأقل');
   }
 
   const allocSum = allocations.reduce((s, a) => s + a.amount, 0);
   if (Math.abs(allocSum - amount) > 0.02) {
-    throw new PaymentExecutionError('Allocation amounts must equal payment amount');
+    throw new PaymentExecutionError('إجمالي المبالغ المخصصة يجب أن يساوي مبلغ الدفعة');
   }
 
   for (const alloc of allocations) {
     const outstanding = await getInvoiceOutstanding(alloc.invoiceType, alloc.invoiceId);
     if (alloc.amount > outstanding + 0.01) {
       throw new PaymentExecutionError(
-        `Allocation ${alloc.amount} exceeds outstanding ${outstanding.toFixed(2)}`,
+        `المبلغ المخصص ${alloc.amount} يتجاوز المتبقي ${outstanding.toFixed(2)}`,
       );
     }
   }
 
   return prisma.$transaction(
     async tx => {
-      const payment = await tx.payment.create({
-        data: {
-          amount,
-          date,
-          type,
-          customerId: params.customerId,
-          supplierId: params.supplierId,
-          salesInvoiceId: params.salesInvoiceId,
-          purchaseInvoiceId: params.purchaseInvoiceId,
-          notes: params.notes,
-          tenantId,
-        },
-      });
-
-      await applyAllocationsInTx(tx, { tenantId, userId, paymentId: payment.id, allocations });
-      const journalEntryId = await postPaymentJournalInTx(tx, {
+      return createPaymentInTx(tx, {
         tenantId,
         userId,
-        paymentId: payment.id,
         amount,
-        type,
         date,
+        type,
+        cashboxId: params.cashboxId!,
+        customerId: params.customerId,
+        supplierId: params.supplierId,
+        salesInvoiceId: params.salesInvoiceId,
+        purchaseInvoiceId: params.purchaseInvoiceId,
+        notes: params.notes,
+        allocations,
       });
-
-      return {
-        payment: await tx.payment.findUniqueOrThrow({
-          where: { id: payment.id },
-          include: { allocations: true },
-        }),
-        journalEntry: { id: journalEntryId },
-      };
     },
     { isolationLevel: 'Serializable', maxWait: 15000, timeout: 30000 },
   );
@@ -281,12 +379,13 @@ export async function executeUpdatePayment(params: {
   type?: 'incoming' | 'outgoing';
   notes?: string;
   allocations?: PaymentAllocationInput[];
+  cashboxId?: string;
 }) {
   const existing = await prisma.payment.findFirst({
     where: { id: params.paymentId, tenantId: params.tenantId },
     include: { allocations: true },
   });
-  if (!existing) throw new PaymentExecutionError('Payment not found');
+  if (!existing) throw new PaymentExecutionError('الدفعة غير موجودة');
 
   const amount = params.amount ?? existing.amount;
   const date = params.date ?? existing.date;
@@ -308,17 +407,18 @@ export async function executeUpdatePayment(params: {
             : [];
 
   if (allocations.length === 0) {
-    throw new PaymentExecutionError('Payment must retain at least one allocation');
+    throw new PaymentExecutionError('يجب أن تظل الدفعة مرتبطة بفاتورة واحدة على الأقل');
   }
 
   const allocSum = allocations.reduce((s, a) => s + a.amount, 0);
   if (Math.abs(allocSum - amount) > 0.02) {
-    throw new PaymentExecutionError('Allocation amounts must equal payment amount');
+    throw new PaymentExecutionError('إجمالي المبالغ المخصصة يجب أن يساوي مبلغ الدفعة');
   }
 
   return prisma.$transaction(
     async tx => {
       await reversePaymentInTx(tx, params.tenantId, params.paymentId);
+      await assertAllocationsWithinOutstandingInTx(tx, allocations);
 
       const payment = await tx.payment.update({
         where: { id: params.paymentId },
@@ -327,6 +427,7 @@ export async function executeUpdatePayment(params: {
           date,
           type,
           ...(params.notes !== undefined && { notes: params.notes }),
+          ...(params.cashboxId !== undefined && { cashboxId: params.cashboxId }),
         },
       });
 
@@ -335,6 +436,18 @@ export async function executeUpdatePayment(params: {
         userId: params.userId,
         paymentId: params.paymentId,
         allocations,
+      });
+      await recordCashboxTransactionInTx(tx, {
+        tenantId: params.tenantId,
+        cashboxId: params.cashboxId ?? (existing as any).cashboxId,
+        type: type === 'incoming' ? 'sales_receipt' : 'purchase_payment',
+        direction: type === 'incoming' ? 'in' : 'out',
+        amount,
+        date,
+        referenceType: PAYMENT_REF,
+        referenceId: params.paymentId,
+        description: params.notes || (type === 'incoming' ? 'تحصيل فاتورة مبيعات' : 'سداد فاتورة مشتريات'),
+        createdBy: params.userId,
       });
 
       const journalEntryId = await postPaymentJournalInTx(tx, {
@@ -366,7 +479,7 @@ export async function executeReversePayment(params: {
   const existing = await prisma.payment.findFirst({
     where: { id: params.paymentId, tenantId: params.tenantId },
   });
-  if (!existing) throw new PaymentExecutionError('Payment not found');
+  if (!existing) throw new PaymentExecutionError('الدفعة غير موجودة');
 
   return prisma.$transaction(
     async tx => {
@@ -393,11 +506,17 @@ export async function executeDeletePayment(params: {
   const existing = await prisma.payment.findFirst({
     where: { id: params.paymentId, tenantId: params.tenantId },
   });
-  if (!existing) throw new PaymentExecutionError('Payment not found');
+  if (!existing) throw new PaymentExecutionError('الدفعة غير موجودة');
 
   return prisma.$transaction(
     async tx => {
       await reversePaymentInTx(tx, params.tenantId, params.paymentId);
+      await reverseAllJournalEntriesForReferenceId(
+        tx,
+        params.tenantId,
+        params.paymentId,
+        PAYMENT_REF,
+      );
       await tx.payment.delete({ where: { id: params.paymentId } });
       return { id: params.paymentId };
     },

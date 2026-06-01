@@ -4,9 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "prisma generate && next build && node scripts/copy-standalone-assets.js",
     "vercel-build": "prisma generate && next build",
-    "railway-build": "prisma generate && next build",
     "build:analyze": "ANALYZE=true next build",
     "backup": "tsx scripts/backup.ts",
     "start": "next start -p $PORT",
@@ -62,8 +61,9 @@
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.51.4",
-    "recharts": "^3.8.1",
+    "recharts": "^2.12.7",
     "tailwindcss": "^3.4.3",
+    "xlsx": "^0.18.5",
     "zod": "^3.23.8",
     "zustand": "^5.0.12"
   },

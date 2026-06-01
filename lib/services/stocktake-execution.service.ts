@@ -10,7 +10,7 @@ import {
   applyStockAdjustmentIncrease,
 } from '@/lib/services/inventory-movement.service';
 import { assertCanPostReference } from '@/lib/services/posting-guard.service';
-import { InvoiceExecutionError } from '@/lib/services/invoice-execution.service';
+import { InvoiceExecutionError } from '@/lib/services/execution-errors';
 
 export async function executeCompleteStocktake(params: {
   tenantId: string;

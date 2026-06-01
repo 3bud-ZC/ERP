@@ -10,6 +10,7 @@ export interface InvoiceLineInput {
   quantity: number;
   price: number;
   unitCost?: number;
+  warehouseId?: string | null;
   discountPercent?: number;
   discountAmount?: number;
   taxRate?: number;
@@ -206,19 +207,23 @@ export function resolveInitialPayment(params: {
   grandTotal: number;
   paidAmount?: number;
 }): { paidAmount: number; paymentStatus: string } {
-  const explicit = Number(params.paidAmount ?? 0);
-  if (explicit > 0) {
-    return {
-      paidAmount: explicit,
-      paymentStatus: derivePaymentStatus({ paidAmount: explicit, grandTotal: params.grandTotal }),
-    };
+  let paidAmount = Number(params.paidAmount ?? 0);
+  const status = params.paymentStatus;
+  
+  if (status === 'cash' || status === 'paid') {
+    paidAmount = params.grandTotal;
+  } else if (status === 'unpaid') {
+    paidAmount = 0;
+  } else if (status === 'partial') {
+    paidAmount = Math.max(0, Math.min(paidAmount, params.grandTotal));
+  } else {
+    // If no specific status or invalid status, clamp explicit amount
+    paidAmount = Math.max(0, Math.min(paidAmount, params.grandTotal));
   }
-  if (params.paymentStatus === 'cash' || params.paymentStatus === 'paid') {
-    return { paidAmount: params.grandTotal, paymentStatus: 'paid' };
-  }
+
   return {
-    paidAmount: 0,
-    paymentStatus: derivePaymentStatus({ paidAmount: 0, grandTotal: params.grandTotal }),
+    paidAmount,
+    paymentStatus: derivePaymentStatus({ paidAmount, grandTotal: params.grandTotal }),
   };
 }
 

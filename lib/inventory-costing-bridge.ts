@@ -6,7 +6,7 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { createInventoryCostingEngine } from '@/lib/inventory-costing';
+import { InsufficientCostLayersError, createInventoryCostingEngine } from '@/lib/inventory-costing';
 
 export { InsufficientCostLayersError } from '@/lib/inventory-costing';
 
@@ -80,12 +80,65 @@ export async function recordStockOutflowWithTx(
 ): Promise<number> {
   if (quantity <= 0) return 0;
   const engine = createInventoryCostingEngine(tenantId, tx);
-  const cogs = await engine.recordStockOutflow(
-    productId,
-    quantity,
-    referenceType,
-    referenceId,
-  );
+  let cogs = 0;
+  try {
+    cogs = await engine.recordStockOutflow(
+      productId,
+      quantity,
+      referenceType,
+      referenceId,
+    );
+  } catch (error) {
+    if (!(error instanceof InsufficientCostLayersError)) {
+      throw error;
+    }
+
+    // Fallback for legacy/opening-stock data: stock exists but no FIFO/WAC layers were seeded.
+    // We synthesize a layer from current valuation/product cost, then retry outflow in the same tx.
+    const [product, valuation] = await Promise.all([
+      tx.product.findFirst({
+        where: { id: productId, tenantId },
+        select: { id: true, stock: true, cost: true },
+      }),
+      tx.inventoryValuation.findUnique({
+        where: { productId },
+        select: { totalQuantity: true, averageCost: true },
+      }),
+    ]);
+
+    const fallbackUnitCost = (() => {
+      if (valuation && valuation.totalQuantity > 0 && valuation.averageCost > 0) return valuation.averageCost;
+      if ((product?.cost ?? 0) > 0) return Number(product!.cost);
+      return 0;
+    })();
+
+    const currentStock = Math.max(0, Number(product?.stock ?? 0));
+    const syntheticQty = Math.max(quantity, quantity + currentStock);
+    if (!product || fallbackUnitCost <= 0 || syntheticQty <= 0) {
+      throw error;
+    }
+
+    await tx.fIFOLayer.create({
+      data: {
+        productId,
+        quantity: syntheticQty,
+        remainingQuantity: syntheticQty,
+        unitCost: fallbackUnitCost,
+        transactionDate: new Date(),
+        referenceType: 'SYSTEM_COST_BACKFILL',
+        referenceId: referenceId || `${productId}:${Date.now()}`,
+        tenantId,
+      },
+    });
+
+    await engine.refreshValuation(productId);
+    cogs = await engine.recordStockOutflow(
+      productId,
+      quantity,
+      referenceType,
+      referenceId,
+    );
+  }
   await syncProductCostFromValuation(tx, productId);
   return cogs;
 }
@@ -109,6 +162,40 @@ export async function getUnitCostInTx(
 }
 
 /** Non-transactional read for UI / planning. */
+/** Remove costing artifacts tied to a business reference (after stock reversal). */
+export async function reverseCostRecordsByReference(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  referenceTypes: string[],
+  referenceId: string,
+): Promise<void> {
+  if (referenceTypes.length === 0) return;
+
+  const typeFilter = { in: referenceTypes };
+
+  const fifoInflows = await tx.fIFOLayer.findMany({
+    where: { tenantId, referenceId, referenceType: typeFilter },
+    select: { productId: true },
+  });
+
+  await tx.cOGSTransaction.deleteMany({
+    where: { tenantId, referenceId, referenceType: typeFilter },
+  });
+  await tx.costLayer.deleteMany({
+    where: { tenantId, referenceId, referenceType: typeFilter },
+  });
+  await tx.fIFOLayer.deleteMany({
+    where: { tenantId, referenceId, referenceType: typeFilter },
+  });
+
+  const productIds = Array.from(new Set(fifoInflows.map(l => l.productId)));
+  const engine = createInventoryCostingEngine(tenantId, tx);
+  for (const productId of productIds) {
+    await engine.refreshValuation(productId);
+    await syncProductCostFromValuation(tx, productId);
+  }
+}
+
 export async function getUnitCostForProduct(
   tenantId: string,
   productId: string,

@@ -1,5 +1,5 @@
 import { supplierRepo } from '@/lib/repositories/supplier.repo';
-import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service';
+import { CODE_ENTITY_KEYS, allocateEntityCode } from '@/lib/code-sequence.service';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
@@ -43,12 +43,13 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { tenantId: _t, ...supplierData } = body;
-    const code = await resolveEntityCode(
-      supplierData.code,
-      CODE_ENTITY_KEYS.SUPPLIER,
-      user.tenantId,
-    );
+    const { tenantId: _t, code: _ignoredCode, ...supplierData } = body;
+
+    if (!supplierData.nameAr || typeof supplierData.nameAr !== 'string' || !supplierData.nameAr.trim()) {
+      return apiError('الاسم بالعربية مطلوب', 400);
+    }
+
+    const code = await allocateEntityCode(CODE_ENTITY_KEYS.SUPPLIER, user.tenantId);
 
     const supplier = await supplierRepo.create({
       code,
@@ -91,7 +92,7 @@ export async function PUT(request: Request) {
     }
 
     const body = await request.json();
-    const { id, ...data } = body;
+    const { id, code: _ignoredCode, ...data } = body;
 
     // SECURITY: Verify supplier belongs to user's tenant
     const existingSupplier = await supplierRepo.findByIdAndTenant(id, user.tenantId!);
@@ -99,7 +100,8 @@ export async function PUT(request: Request) {
       return apiError('المورد غير موجود', 404);
     }
 
-    const supplier = await supplierRepo.update(id, data);
+    const { code: _c, ...safeData } = data as Record<string, unknown>;
+    const supplier = await supplierRepo.update(id, safeData);
 
     await logAuditAction(
       user.id,

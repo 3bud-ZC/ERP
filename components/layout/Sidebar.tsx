@@ -15,8 +15,12 @@ import {
   BookOpen,
   Factory,
   PieChart,
+  ShieldCheck,
+  Building2,
+  Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { BRAND } from '@/lib/branding';
 
 interface NavSubItem {
   title: string;
@@ -28,32 +32,41 @@ interface NavItem {
   /** Either a direct link or a parent for `children`. */
   href: string;
   icon: React.ReactNode;
+  platformOnly?: boolean;
+  requiredPermission?: string;
   /** When present, the item becomes a collapsible group. */
   children?: NavSubItem[];
 }
 
 const navItems: NavItem[] = [
   {
+    title: 'Admin',
+    href: '/admin',
+    icon: <Building2 className="w-5 h-5" />,
+    platformOnly: true,
+  },
+  {
     title: 'لوحة التحكم',
     href: '/dashboard',
     icon: <LayoutDashboard className="w-5 h-5" />,
+    children: [
+      { title: 'نظرة عامة', href: '/dashboard' },
+    ],
   },
   {
     title: 'الخدمات',
-    href: '/services',
+    href: '/customers',
     icon: <Users className="w-5 h-5" />,
     children: [
-      { title: 'نظرة عامة', href: '/services' },
       { title: 'العملاء',    href: '/customers' },
       { title: 'الموردون',   href: '/suppliers' },
     ],
   },
   {
     title: 'المخازن',
-    href: '/inventory',
+    href: '/inventory/raw-materials',
     icon: <Package className="w-5 h-5" />,
     children: [
-      { title: 'نظرة عامة',       href: '/inventory' },
       { title: 'مواد خام',        href: '/inventory/raw-materials' },
       { title: 'منتجات نهائية',   href: '/inventory/finished-products' },
       { title: 'المستودعات',      href: '/warehouses' },
@@ -62,20 +75,18 @@ const navItems: NavItem[] = [
   },
   {
     title: 'الفواتير',
-    href: '/invoices',
+    href: '/invoices/sales',
     icon: <FileText className="w-5 h-5" />,
     children: [
-      { title: 'نظرة عامة',         href: '/invoices' },
       { title: 'فواتير المبيعات',  href: '/invoices/sales' },
       { title: 'فواتير المشتريات', href: '/invoices/purchases' },
     ],
   },
   {
     title: 'التصنيع',
-    href: '/manufacturing',
+    href: '/manufacturing/production-orders',
     icon: <Factory className="w-5 h-5" />,
     children: [
-      { title: 'نظرة عامة',     href: '/manufacturing' },
       { title: 'أوامر الإنتاج',  href: '/manufacturing/production-orders' },
       { title: 'قوائم المواد',   href: '/manufacturing/bom' },
       { title: 'خطوط الإنتاج',   href: '/manufacturing/production-lines' },
@@ -87,10 +98,14 @@ const navItems: NavItem[] = [
     href: '/accounting',
     icon: <BookOpen className="w-5 h-5" />,
     children: [
-      { title: 'نظرة عامة',     href: '/accounting' },
-      { title: 'القيود المحاسبية', href: '/accounting/journal-entries' },
-      { title: 'المالية',          href: '/accounting/finance' },
-      { title: 'ميزان المراجعة',   href: '/accounting/trial-balance' },
+      { title: 'لوحة المحاسبة',        href: '/accounting' },
+      { title: 'الخزن',               href: '/accounting/treasury' },
+      // تم دمج (الخزن + الحركات + التحليلات) داخل صفحة الخزنة نفسها لتقليل التشتيت.
+      { title: 'المدفوعات',           href: '/accounting/payments' },
+      { title: 'ميزان المراجعة',      href: '/accounting/trial-balance' },
+      // ملاحظة: صفحات المحاسبة المتقدمة (قيود/دليل حسابات/ميزان مراجعة...)
+      // ما زالت موجودة كـ routes لكن تم إخفاؤها من قائمة "المحاسبة" لتبسيط الواجهة.
+      // مثال: القيود اليومية، دليل الحسابات، ميزان المراجعة التفصيلي... إلخ.
     ],
   },
   {
@@ -105,11 +120,18 @@ const navItems: NavItem[] = [
       { title: 'تقرير المصروفات',   href: '/reports/expenses' },
       { title: 'كشف حساب عميل',    href: '/reports/customer-statement' },
       { title: 'كشف حساب مورد',    href: '/reports/supplier-statement' },
+      { title: 'مديونيات العملاء',  href: '/reports/receivables' },
+      { title: 'مستحقات الموردين',  href: '/reports/payables' },
       { title: 'تقرير الأعمار',     href: '/reports/aging' },
       { title: 'قائمة الدخل',         href: '/reports/profit-loss' },
       { title: 'الميزانية العمومية', href: '/reports/balance-sheet' },
       { title: 'تقرير التصنيع',    href: '/reports/manufacturing' },
     ],
+  },
+  {
+    title: 'الإعدادات',
+    href: '/settings',
+    icon: <Settings className="w-5 h-5" />,
   },
 ];
 
@@ -121,13 +143,23 @@ interface SidebarProps {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
   const { user } = useAuthStore();
+  const isPlatformAdmin = user?.email?.toLowerCase() === 'admin@erp.com';
+  const isTenantAdmin = user?.roles?.includes('admin') || (user?.email || '').toLowerCase().includes('admin');
+  const permissionSet = new Set(user?.permissions || []);
+  const visibleNavItems = navItems.filter(item => {
+    if (item.platformOnly && !isPlatformAdmin) return false;
+    if (!item.requiredPermission) return true;
+    if (isPlatformAdmin || isTenantAdmin) return true;
+    return permissionSet.has(item.requiredPermission);
+  });
   // افتح المجموعات ذات الصلة تلقائياً حسب المسار الحالي.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => ({
-    '/services':      pathname?.startsWith('/services')      || pathname?.startsWith('/customers')  || pathname?.startsWith('/suppliers')  || false,
-    '/inventory':     pathname?.startsWith('/inventory')     || pathname?.startsWith('/warehouses') || false,
-    '/invoices':      pathname?.startsWith('/invoices')      ?? false,
-    '/manufacturing': pathname?.startsWith('/manufacturing') ?? false,
-    '/accounting':    pathname?.startsWith('/accounting')    ?? false,
+    '/dashboard':     pathname?.startsWith('/dashboard')     ?? false,
+    '/customers':     pathname?.startsWith('/services')      || pathname?.startsWith('/customers')  || pathname?.startsWith('/suppliers')  || false,
+    '/inventory/raw-materials': pathname?.startsWith('/inventory') || pathname?.startsWith('/warehouses') || false,
+    '/invoices/sales': pathname?.startsWith('/invoices')     ?? false,
+    '/manufacturing/production-orders': pathname?.startsWith('/manufacturing') ?? false,
+    '/accounting': pathname?.startsWith('/accounting') ?? false,
     '/reports':       pathname?.startsWith('/reports')       ?? false,
   }));
   const toggleGroup = (href: string) =>
@@ -136,34 +168,35 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <div
       className={cn(
-        'fixed right-0 top-0 h-full text-white transition-all duration-300 z-40 shadow-2xl',
-        'bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950',
-        'border-l border-slate-800/60',
+        'hidden lg:block fixed right-0 top-0 h-full text-slate-700 transition-all duration-300 z-40 neo-raised',
+        'border-l border-slate-200/70',
         collapsed ? 'w-16' : 'w-64'
       )}
       dir="rtl"
     >
       <div className="flex flex-col h-full">
         {/* Brand */}
-        <div className="flex items-center justify-between px-4 h-16 border-b border-slate-800/60">
+        <div className="flex items-center justify-between px-4 h-20 border-b border-slate-200/80">
           {!collapsed ? (
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center font-extrabold text-white shadow-lg shadow-blue-500/20">
-                E
+              <div className="w-11 h-11 rounded-2xl neo-raised flex items-center justify-center text-indigo-700 font-black text-base">
+                OG
               </div>
               <div className="leading-tight">
-                <div className="text-base font-bold text-white">نظام ERP</div>
-                <div className="text-[10px] text-slate-400 tracking-wide uppercase">Business Suite</div>
+                <div className="text-lg font-black text-indigo-700">{BRAND.name}</div>
+                {BRAND.taglineEn ? (
+                  <div className="text-[10px] text-slate-500 tracking-[0.18em] uppercase">{BRAND.taglineEn}</div>
+                ) : null}
               </div>
             </div>
           ) : (
-            <div className="w-9 h-9 mx-auto rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center font-extrabold text-white shadow-lg shadow-blue-500/20">
-              E
+            <div className="w-11 h-11 mx-auto rounded-2xl neo-raised flex items-center justify-center text-indigo-700 font-black text-base">
+              OG
             </div>
           )}
           <button
             onClick={onToggle}
-            className="p-1.5 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
+            className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-200/70 hover:text-indigo-700 transition-colors"
             aria-label="تبديل الشريط الجانبي"
           >
             {collapsed ? (
@@ -175,34 +208,36 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
-          {navItems.map((item) => {
-            const isActive = pathname?.startsWith(item.href);
+        <nav className="flex-1 p-3 space-y-2 overflow-y-auto">
+          {visibleNavItems.map((item) => {
             const hasChildren = !!(item.children && item.children.length > 0);
+            const isActive = hasChildren
+              ? item.children!.some(child => pathname === child.href || pathname?.startsWith(child.href + '/'))
+              : pathname?.startsWith(item.href);
             const isOpen = openGroups[item.href] ?? false;
 
             // Group with submenu — only when sidebar isn't collapsed.
             if (hasChildren && !collapsed) {
               return (
-                <div key={item.href} className="relative">
-                  {isActive && <span className="absolute right-0 top-2 bottom-2 w-1 rounded-l-full bg-gradient-to-b from-blue-400 to-indigo-500" aria-hidden />}
+                <div key={item.href} className="relative rounded-2xl p-1">
+                  {isActive && <span className="absolute right-0 top-2 bottom-2 w-1 rounded-l-full bg-indigo-500" aria-hidden />}
                   <button
                     type="button"
                     onClick={() => toggleGroup(item.href)}
                     className={cn(
-                      'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all flex-row-reverse justify-end',
+                      'w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl transition-all flex-row-reverse justify-end',
                       isActive
-                        ? 'bg-gradient-to-l from-blue-600/30 via-blue-600/10 to-transparent text-white shadow-sm'
-                        : 'text-slate-300 hover:bg-slate-800/70 hover:text-white',
+                        ? 'neo-inset text-indigo-700'
+                        : 'text-slate-600 hover:bg-slate-100/80 hover:text-indigo-700',
                     )}
                     aria-expanded={isOpen}
                   >
-                    <ChevronDown className={cn('w-4 h-4 transition-transform text-slate-400', isOpen ? 'rotate-180 text-blue-300' : '')} />
+                    <ChevronDown className={cn('w-4 h-4 transition-transform text-slate-400', isOpen ? 'rotate-180 text-indigo-500' : '')} />
                     <span className="flex-1 text-sm font-medium text-right">{item.title}</span>
-                    <span className={cn('shrink-0', isActive ? 'text-blue-300' : 'text-slate-400')}>{item.icon}</span>
+                    <span className={cn('shrink-0', isActive ? 'text-indigo-600' : 'text-slate-400')}>{item.icon}</span>
                   </button>
                   {isOpen && (
-                    <div className="mt-1 mr-3 pr-3 border-r border-slate-800 space-y-0.5">
+                    <div className="mt-1.5 mr-2 pr-3 border-r border-slate-300/80 space-y-1.5">
                       {item.children!.map(child => {
                         const childActive = pathname === child.href || pathname?.startsWith(child.href + '/');
                         return (
@@ -210,10 +245,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                             key={child.href}
                             href={child.href}
                             className={cn(
-                              'block px-3 py-1.5 rounded-lg text-xs transition-colors text-right',
+                              'block px-3 py-2 rounded-xl text-xs transition-colors text-right',
                               childActive
-                                ? 'bg-blue-500/15 text-blue-200 font-semibold'
-                                : 'text-slate-400 hover:text-white hover:bg-slate-800/70',
+                                ? 'neo-inset text-indigo-700 font-semibold'
+                                : 'text-slate-500 hover:text-indigo-700 hover:bg-slate-100/75',
                             )}
                           >
                             {child.title}
@@ -228,20 +263,20 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
             // Plain link (or collapsed sidebar)
             return (
-              <div key={item.href} className="relative">
-                {isActive && !collapsed && <span className="absolute right-0 top-2 bottom-2 w-1 rounded-l-full bg-gradient-to-b from-blue-400 to-indigo-500" aria-hidden />}
+              <div key={item.href} className="relative rounded-2xl p-1">
+                {isActive && !collapsed && <span className="absolute right-0 top-2 bottom-2 w-1 rounded-l-full bg-indigo-500" aria-hidden />}
                 <Link
                   href={item.href}
                   className={cn(
-                    'flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all',
+                    'flex items-center gap-3 px-3 py-2.5 rounded-2xl transition-all',
                     isActive
-                      ? 'bg-gradient-to-l from-blue-600/30 via-blue-600/10 to-transparent text-white shadow-sm'
-                      : 'text-slate-300 hover:bg-slate-800/70 hover:text-white',
+                      ? 'neo-inset text-indigo-700'
+                      : 'text-slate-600 hover:bg-slate-100/80 hover:text-indigo-700',
                     collapsed ? 'justify-center' : 'flex-row-reverse justify-end'
                   )}
                   title={item.title}
                 >
-                  <span className={cn('shrink-0', isActive ? 'text-blue-300' : 'text-slate-400')}>{item.icon}</span>
+                  <span className={cn('shrink-0', isActive ? 'text-indigo-600' : 'text-slate-400')}>{item.icon}</span>
                   {!collapsed && <span className="text-sm font-medium">{item.title}</span>}
                 </Link>
               </div>
@@ -251,16 +286,16 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
         {/* User / Tenant Info */}
         {!collapsed && (
-          <div className="p-4 border-t border-slate-800/60">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shrink-0 shadow-md shadow-blue-500/20">
+          <div className="p-4 border-t border-slate-200/80">
+            <div className="flex items-center gap-2.5 rounded-2xl neo-inset p-3">
+              <div className="w-10 h-10 rounded-xl neo-raised flex items-center justify-center text-indigo-700 font-bold text-sm shrink-0">
                 {(user?.name?.[0] ?? 'م').toUpperCase()}
               </div>
               <div className="min-w-0 text-right">
-                <div className="font-semibold text-white text-sm truncate">
+                <div className="font-semibold text-slate-800 text-sm truncate">
                   {user?.name || 'المستخدم'}
                 </div>
-                <div className="truncate text-[11px] text-slate-400">
+                <div className="truncate text-[11px] text-slate-500">
                   {user?.email || ''}
                 </div>
               </div>

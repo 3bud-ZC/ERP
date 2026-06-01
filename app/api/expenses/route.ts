@@ -10,6 +10,7 @@ import { expenseRepo } from '@/lib/repositories/expense.repo';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { logActivity } from '@/lib/activity-log';
+import { recordCashboxTransactionInTx } from '@/lib/services/cashbox.service';
 
 // GET - Read expenses
 export async function GET(request: Request) {
@@ -19,7 +20,11 @@ export async function GET(request: Request) {
       return apiError('لم يتم المصادقة', 401);
     }
 
-    const expenses = await expenseRepo.listAll();
+    if (!user.tenantId) {
+      return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
+    }
+
+    const expenses = await expenseRepo.listByTenant(user.tenantId);
     return apiSuccess(expenses, 'Expenses fetched successfully');
   } catch (error) {
     return handleApiError(error, 'Fetch expenses');
@@ -41,14 +46,15 @@ export async function POST(request: Request) {
     const body = await request.json();
       const { expenseType } = body;
       const expense = await prisma.$transaction(async (tx) => {
+        const total = Number(body.total || body.amount || 0);
         const newExpense = await (tx as any).expense.create({
           data: {
-            expenseNumber: body.expenseNumber,
+            expenseNumber: body.expenseNumber || `EXP-${Date.now()}`,
             category: body.category || '',
             description: body.description || '',
             amount: body.amount || 0,
             tax: body.tax || 0,
-            total: body.total || 0,
+            total,
             date: new Date(body.date),
             notes: body.notes || null,
             supplierId: body.supplierId || null,
@@ -58,9 +64,25 @@ export async function POST(request: Request) {
             status: body.status || 'pending',
             costCenter: body.costCenter || null,
             accountNumber: body.accountNumber || null,
+            cashboxId: body.cashboxId || null,
             tenantId: user.tenantId,
           },
         });
+
+        if (body.cashboxId && total > 0) {
+          await recordCashboxTransactionInTx(tx, {
+            tenantId: user.tenantId!,
+            cashboxId: body.cashboxId,
+            type: expenseType === 'salaries' ? 'salary' : 'expense',
+            direction: 'out',
+            amount: total,
+            date: new Date(body.date),
+            referenceType: 'Expense',
+            referenceId: newExpense.id,
+            description: body.description || 'تسجيل مصروف',
+            createdBy: user.id,
+          });
+        }
 
         return newExpense;
       });
@@ -93,7 +115,7 @@ export async function POST(request: Request) {
         after: expense,
       });
 
-      return apiSuccess(expense, 'Expense created successfully');
+      return apiSuccess(expense, 'تم إنشاء المصروف بنجاح');
     } catch (error) {
       return handleApiError(error, 'Create expense');
     }

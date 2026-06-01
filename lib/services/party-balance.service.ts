@@ -2,6 +2,7 @@
  * Customer / supplier balance from invoices, payments, and returns.
  */
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { invoiceAmountDue } from '@/lib/utils/invoice-tax';
 
@@ -118,6 +119,27 @@ export async function getSupplierBalance(
     balanceDue,
     overdueCount,
   };
+}
+
+export async function getInvoiceOutstandingInTx(
+  tx: Prisma.TransactionClient,
+  invoiceType: 'sales' | 'purchase',
+  invoiceId: string,
+): Promise<number> {
+  if (invoiceType === 'sales') {
+    const inv = await tx.salesInvoice.findUnique({
+      where: { id: invoiceId },
+      select: { grandTotal: true, total: true, paidAmount: true },
+    });
+    if (!inv) return 0;
+    return invoiceAmountDue(inv.grandTotal || inv.total, inv.paidAmount);
+  }
+  const inv = await tx.purchaseInvoice.findUnique({
+    where: { id: invoiceId },
+    select: { grandTotal: true, total: true, paidAmount: true },
+  });
+  if (!inv) return 0;
+  return invoiceAmountDue(inv.grandTotal || inv.total, inv.paidAmount);
 }
 
 export async function getInvoiceOutstanding(

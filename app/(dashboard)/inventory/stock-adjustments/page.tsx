@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import Link from 'next/link';
 import {
   Plus, ClipboardList, Search, Trash2, AlertCircle, ArrowUpCircle, ArrowDownCircle,
@@ -60,7 +60,7 @@ export default function StockAdjustmentsPage() {
   });
   const productsQ = useQuery({
     queryKey: ['products', 'lite'],
-    queryFn:  () => apiGet<ProductLite[]>('/api/products'),
+    queryFn:  () => apiGetList<ProductLite>('/api/products'),
     staleTime: 60_000,
   });
 
@@ -127,7 +127,7 @@ export default function StockAdjustmentsPage() {
       subtitle={loading ? 'جاري التحميل…' : `${adjustments.length} تسوية`}
       toolbar={
         <Link href="/inventory/stock-adjustments/new"
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium">
+          className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium">
           <Plus className="w-4 h-4" /> تسوية جديدة
         </Link>
       }
@@ -153,7 +153,7 @@ export default function StockAdjustmentsPage() {
           <Search className="absolute right-3 top-2.5 w-4 h-4 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="بحث برقم التسوية أو المنتج…"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
         </div>
       </div>
 

@@ -22,6 +22,17 @@ import { AuditService } from './services/audit-service';
 import { EventBus } from './services/event-bus';
 import { logger } from '@/lib/structured-logger';
 
+/** Types handled by canonical execution services (no legacy adapter posting). */
+const CANONICAL_LEDGER_TYPES = new Set([
+  'SALES_INVOICE',
+  'PURCHASE_INVOICE',
+  'SALES_RETURN',
+  'PURCHASE_RETURN',
+  'PAYMENT',
+  'PRODUCTION_ORDER',
+  'STOCK_ADJUSTMENT',
+]);
+
 export class ERPExecutionEngine {
   static async execute(tx: ERPTransaction): Promise<ERPTransactionResult> {
     try {
@@ -41,13 +52,14 @@ export class ERPExecutionEngine {
       await logger.info(`Routing to business logic: ${tx.type}`);
       const businessResult = await BusinessRouter.route(tx, workflowResult);
 
-      // Step 5: Sync inventory
-      await logger.info(`Syncing inventory: ${tx.type}`);
-      await InventoryAdapter.sync(tx, businessResult);
-
-      // Step 6: Generate and post journal entries
-      await logger.info(`Posting to ledger: ${tx.type}`);
-      const journalEntries = await AccountingAdapter.post(tx, businessResult);
+      // Step 5–6: Legacy adapters skipped for canonical document types
+      let journalEntries: unknown[] = [];
+      if (!CANONICAL_LEDGER_TYPES.has(tx.type)) {
+        await logger.info(`Syncing inventory: ${tx.type}`);
+        await InventoryAdapter.sync(tx, businessResult);
+        await logger.info(`Posting to ledger: ${tx.type}`);
+        journalEntries = await AccountingAdapter.post(tx, businessResult);
+      }
 
       // Step 7: Emit event
       await logger.info(`Emitting event: ${tx.type}`);

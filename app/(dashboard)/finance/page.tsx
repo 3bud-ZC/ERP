@@ -6,5 +6,5 @@ import { redirect } from 'next/navigation';
  * new home of the page (`/accounting/finance`).
  */
 export default function FinanceRedirect() {
-  redirect('/accounting/finance');
+  redirect('/accounting');
 }

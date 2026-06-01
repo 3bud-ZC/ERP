@@ -2,7 +2,8 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGetList } from '@/lib/api/fetcher';
+import { matchesEntitySearch } from '@/lib/api/safe-array';
 import { queryKeys } from '@/lib/api/query-keys';
 import { Plus, X, Pencil, Trash2, FileText, AlertCircle, Search, Users } from 'lucide-react';
 import Link from 'next/link';
@@ -32,8 +33,8 @@ export default function CustomersPage() {
   const qc = useQueryClient();
   const customersQ = useQuery({
     queryKey: queryKeys.customers,
-    queryFn: () => apiGet<Customer[]>('/api/customers'),
-    staleTime: 60_000,
+    queryFn: () => apiGetList<Customer>('/api/customers'),
+    staleTime: 10_000,
   });
   const customers = useMemo(() => customersQ.data ?? [], [customersQ.data]);
   const loading = customersQ.isLoading;
@@ -51,15 +52,19 @@ export default function CustomersPage() {
     qc.invalidateQueries({ queryKey: queryKeys.customers });
   }, [qc]);
 
-  const filtered = useMemo(() =>
-    customers.filter(c =>
-      !search ||
-      c.nameAr.includes(search) ||
-      (c.nameEn || '').toLowerCase().includes(search.toLowerCase()) ||
-      c.code.toLowerCase().includes(search.toLowerCase()) ||
-      (c.phone || '').includes(search) ||
-      (c.email || '').toLowerCase().includes(search.toLowerCase())
-    ), [customers, search]);
+  const filtered = useMemo(
+    () =>
+      customers.filter((c) =>
+        matchesEntitySearch(search, [
+          c.nameAr,
+          c.nameEn,
+          c.code,
+          c.phone,
+          c.email,
+        ]),
+      ),
+    [customers, search],
+  );
 
   async function handleDelete() {
     if (!deleteId) return;
@@ -79,7 +84,7 @@ export default function CustomersPage() {
       subtitle={loading ? 'جاري التحميل…' : `${customers.length} عميل`}
       toolbar={
         <Link href="/customers/new"
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium">
+          className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium">
           <Plus className="w-4 h-4" /> إضافة عميل
         </Link>
       }
@@ -92,7 +97,7 @@ export default function CustomersPage() {
           <Search className="absolute right-3 top-2.5 w-4 h-4 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="بحث بالاسم أو الرمز أو الهاتف…"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
           {search && (
             <button onClick={() => setSearch('')} className="absolute left-3 top-2.5 text-slate-400 hover:text-slate-600">
               <X className="w-4 h-4" />
@@ -153,7 +158,7 @@ export default function CustomersPage() {
                         <FileText className="w-4 h-4" />
                       </Link>
                       <Link href={`/customers/${c.id}/edit`}
-                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="تعديل">
+                        className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors" title="تعديل">
                         <Pencil className="w-4 h-4" />
                       </Link>
                       <button onClick={() => { setDeleteId(c.id); setDeleteError(null); }}

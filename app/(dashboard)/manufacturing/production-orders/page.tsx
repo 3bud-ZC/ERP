@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { Plus, ClipboardList, Search, Eye, Trash2 } from 'lucide-react';
 import { TableSkeleton, EmptyState, ErrorBanner, Toast, useToast } from '@/components/ui/patterns';
 import { ManufacturingLayout } from '@/components/manufacturing/ManufacturingLayout';
@@ -33,7 +33,7 @@ const STATUS_OPTS = [
 function statusBadge(s: string) {
   const m: Record<string, { label: string; cls: string }> = {
     pending:     { label: 'معلّق',         cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-    in_progress: { label: 'قيد التنفيذ',  cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+    in_progress: { label: 'قيد التنفيذ',  cls: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
     completed:   { label: 'مكتمل',         cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
     cancelled:   { label: 'ملغى',           cls: 'bg-slate-100 text-slate-500 border-slate-200' },
   };
@@ -46,11 +46,11 @@ export default function ProductionOrdersListPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
-  const ordersQ = useQuery({
-    queryKey: ['production-orders'],
-    queryFn:  () => apiGet<ProductionOrder[]>('/api/production-orders'),
-    staleTime: 30_000,
-  });
+    const ordersQ = useQuery({
+      queryKey: ['production-orders'],
+      queryFn:  () => apiGetList<ProductionOrder>('/api/production-orders'),
+      staleTime: 10_000,
+    });
 
   const orders  = useMemo(() => ordersQ.data ?? [], [ordersQ.data]);
   const loading = ordersQ.isLoading;
@@ -102,7 +102,7 @@ export default function ProductionOrdersListPage() {
       toolbar={
         <Link
           href="/manufacturing/production-orders/new"
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium"
+          className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium"
         >
           <Plus className="w-4 h-4" /> أمر إنتاج جديد
         </Link>
@@ -125,7 +125,7 @@ export default function ProductionOrdersListPage() {
           <Search className="absolute right-3 top-2.5 w-4 h-4 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="بحث برقم الأمر أو المنتج…"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
         </div>
       </div>
 
@@ -180,7 +180,7 @@ export default function ProductionOrdersListPage() {
                     <td className="px-5 py-3 text-center">
                       <div className="flex items-center justify-center gap-1">
                         <Link href={`/manufacturing/production-orders/${o.id}`} title="عرض"
-                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                          className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors">
                           <Eye className="w-4 h-4" />
                         </Link>
                         <button onClick={() => { setDeleteId(o.id); setDeleteError(null); }}

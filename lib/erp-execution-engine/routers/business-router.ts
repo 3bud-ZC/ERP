@@ -5,6 +5,7 @@
 
 import { ERPTransaction, ERPTransactionType } from '../types';
 import { prisma } from '@/lib/db';
+import { executeCreatePayment } from '@/lib/services/payment-execution.service';
 
 // Workflow handlers
 class SalesWorkflow {
@@ -243,28 +244,47 @@ class PurchaseWorkflow {
 class PaymentWorkflow {
   static async handle(tx: ERPTransaction, state: any): Promise<any> {
     const { payload, context } = tx;
-    
-    const payment = await prisma.payment.create({
-      data: {
-        amount: payload.amount,
-        date: payload.date ? new Date(payload.date) : new Date(),
-        type: payload.type || (payload.salesInvoiceId ? 'incoming' : 'outgoing'),
-        salesInvoiceId: payload.salesInvoiceId,
-        purchaseInvoiceId: payload.purchaseInvoiceId,
-        customerId: payload.customerId,
-        supplierId: payload.supplierId,
-        notes: payload.notes,
-        tenantId: context.tenantId,
-      },
-      include: {
-        customer: true,
-        supplier: true,
-        salesInvoice: true,
-        purchaseInvoice: true,
-      },
+
+    const amount = Number(payload.amount);
+    const type =
+      payload.type || (payload.salesInvoiceId ? 'incoming' : 'outgoing');
+
+    const allocations =
+      payload.allocations?.length > 0
+        ? payload.allocations
+        : payload.salesInvoiceId
+          ? [
+              {
+                invoiceId: payload.salesInvoiceId,
+                invoiceType: 'sales' as const,
+                amount,
+              },
+            ]
+          : payload.purchaseInvoiceId
+            ? [
+                {
+                  invoiceId: payload.purchaseInvoiceId,
+                  invoiceType: 'purchase' as const,
+                  amount,
+                },
+              ]
+            : undefined;
+
+    const result = await executeCreatePayment({
+      tenantId: context.tenantId,
+      userId: context.userId || 'system',
+      amount,
+      date: payload.date ? new Date(payload.date) : new Date(),
+      type,
+      customerId: payload.customerId,
+      supplierId: payload.supplierId,
+      salesInvoiceId: payload.salesInvoiceId,
+      purchaseInvoiceId: payload.purchaseInvoiceId,
+      notes: payload.notes,
+      allocations,
     });
 
-    return payment;
+    return result.payment;
   }
 }
 

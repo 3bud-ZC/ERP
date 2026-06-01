@@ -46,41 +46,51 @@ export async function recordStockMovement(
  * Must be called before executing stock-affecting operations (sales, etc.)
  */
 export async function validateStockAvailability(
-  items: { productId: string; quantity: number }[]
+  items: { productId: string; quantity: number }[],
+  tenantId?: string
 ): Promise<StockValidationResult> {
   const errors: StockValidationResult['errors'] = [];
 
+  // Aggregate per product to avoid false positives/negatives when the same product
+  // appears on multiple lines in the same invoice.
+  const requestedByProduct = new Map<string, number>();
+  for (const item of items) {
+    const key = String(item.productId || '').trim();
+    if (!key) continue;
+    requestedByProduct.set(key, (requestedByProduct.get(key) || 0) + Number(item.quantity || 0));
+  }
+
   // Load all affected products
-  const productIds = items.map((item) => item.productId);
+  const productIds = Array.from(requestedByProduct.keys());
   const products = await prisma.product.findMany({
-    where: { id: { in: productIds } },
+    where: {
+      id: { in: productIds },
+      ...(tenantId ? { tenantId } : {}),
+    },
     select: { id: true, nameAr: true, nameEn: true, stock: true },
   });
 
   const productMap = new Map(products.map((p) => [p.id, p]));
 
-  // Validate each item
-  for (const item of items) {
-    const product = productMap.get(item.productId);
+  // Validate aggregated quantities
+  requestedByProduct.forEach((requested, productId) => {
+    const product = productMap.get(productId);
     if (!product) {
       errors.push({
-        productId: item.productId,
+        productId,
         productName: 'Unknown Product',
-        requested: item.quantity,
+        requested,
         available: 0,
       });
-      continue;
-    }
-
-    if (product.stock < item.quantity) {
+    } else if (Number(product.stock || 0) < requested) {
       errors.push({
-        productId: item.productId,
+        productId,
         productName: product.nameAr || product.nameEn || 'Unknown',
-        requested: item.quantity,
-        available: product.stock,
+        requested,
+        available: Number(product.stock || 0),
       });
     }
-  }
+  });
 
   return {
     valid: errors.length === 0,

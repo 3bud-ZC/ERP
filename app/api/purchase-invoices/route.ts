@@ -4,18 +4,12 @@ import { purchaseInvoiceRepo } from '@/lib/repositories/purchase-invoice.repo';
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-import {
-  reverseJournalEntry,
-  createPurchaseInvoiceEntry,
-  postJournalEntry,
-} from '@/lib/accounting';
 import { dualRunCompare, dualRunCompareById } from '@/lib/domain/accounting/dual-run';
-import { createInventoryTransaction } from '@/lib/inventory-transactions';
 import {
   executeCreatePurchaseInvoice,
   executeUpdatePurchaseInvoice,
   executeCancelPurchaseInvoice,
-  executeDeletePurchaseInvoice,
+  executeDeleteInvoice,
   InvoiceExecutionError,
   mapExecutionError,
 } from '@/lib/services/invoice-execution.service';
@@ -25,6 +19,7 @@ import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { logActivity } from '@/lib/activity-log';
 import { resolveInvoiceNumber } from '@/lib/invoice-numbering';
+import { toArabicError } from '@/lib/utils/arabic-errors';
 
 /**
  * Coerce a raw value into a full ISO-8601 datetime string suitable for
@@ -54,6 +49,15 @@ function normalizeInvoiceDates(data: Record<string, any>): Record<string, any> {
 // Translate backend errors to user-friendly Arabic messages
 function translatePurchaseError(error: any): string {
   const msg: string = error?.message || String(error);
+  if (msg.includes('must have at least one item')) return 'يجب إضافة صنف واحد على الأقل';
+  if (msg.includes('allocation') && msg.includes('payment amount')) return 'توزيع الدفعة غير صحيح بالنسبة للفاتورة';
+  if (msg.includes('must be linked to at least one invoice')) return 'يجب ربط الدفعة بفاتورة واحدة على الأقل';
+  if (msg.includes('paid amount cannot exceed') || msg.includes('cannot exceed')) return 'المبلغ المدفوع لا يمكن أن يتجاوز إجمالي الفاتورة';
+  if (msg.includes('cashbox')) return 'يجب اختيار الخزنة عند تسجيل مبلغ مدفوع';
+  if (msg.includes('supplier') && msg.includes('not found')) return 'المورد غير موجود أو لا يتبع هذا الحساب';
+  if (msg.includes('product') && msg.includes('not found')) return 'يوجد صنف غير موجود أو غير تابع للحساب';
+  if (msg.includes('Account') || msg.includes('account code')) return 'دليل الحسابات غير مكتمل لهذا الحساب الجديد. أعد إنشاء الحساب أو تواصل مع الإدارة.';
+  if (msg.includes('posting') || msg.includes('journal')) return 'تعذر ترحيل القيد المحاسبي. تحقق من إعدادات الحسابات.';
   if (msg.includes('Foreign key') || msg.includes('foreign key') || msg.includes('P2003')) return 'هذا العنصر مرتبط ببيانات أخرى';
   if (msg.includes('Unique constraint') || msg.includes('P2002')) return 'رقم الفاتورة مستخدم بالفعل';
   if (msg.includes('Validation') || msg.includes('validation') || msg.includes('P2000')) return 'بيانات غير مكتملة أو غير صحيحة';
@@ -104,12 +108,23 @@ export async function POST(request: Request) {
 
     const body = await request.json();
       const { items, tenantId: _clientTenantId, ...invoiceData } = body;
+      const initialPaidAmount = Number(invoiceData.paidAmount || 0);
+      const cashboxId = invoiceData.cashboxId ? String(invoiceData.cashboxId) : '';
+      const paymentStatus = String(invoiceData.paymentStatus || '').trim().toLowerCase();
+      const requiresCashbox = initialPaidAmount > 0 || paymentStatus === 'cash' || paymentStatus === 'paid';
       // Normalize date fields (form sends "YYYY-MM-DD"; Prisma needs ISO-8601).
       normalizeInvoiceDates(invoiceData);
 
       // Explicit input validation
       if (!invoiceData.supplierId) {
         return apiError('يجب اختيار المورد', 400);
+      }
+      const supplierExists = await prisma.supplier.findFirst({
+        where: { id: String(invoiceData.supplierId), tenantId: user.tenantId! },
+        select: { id: true },
+      });
+      if (!supplierExists) {
+        return apiError('المورد غير موجود أو غير مرتبط بهذا الحساب', 400);
       }
       if (!Array.isArray(items) || items.length === 0) {
         return apiError('يجب إضافة صنف واحد على الأقل', 400);
@@ -118,6 +133,19 @@ export async function POST(request: Request) {
         if (!item.productId) return apiError('كل صنف يجب أن يحتوي على منتج محدد', 400);
         if (Number(item.quantity) <= 0) return apiError('الكمية يجب أن تكون أكبر من صفر', 400);
         if (Number(item.price) < 0) return apiError('السعر يجب أن يكون صحيحاً', 400);
+      }
+      if (initialPaidAmount < 0) return apiError('المبلغ المدفوع لا يمكن أن يكون أقل من صفر', 400);
+      if (requiresCashbox && !cashboxId) {
+        return apiError('يجب اختيار الخزنة عند تسجيل مبلغ مدفوع', 400);
+      }
+      if (cashboxId) {
+        const cashboxExists = await (prisma as any).cashbox.findFirst({
+          where: { id: cashboxId, tenantId: user.tenantId! },
+          select: { id: true },
+        });
+        if (!cashboxExists) {
+          return apiError('الخزنة المحددة غير صالحة لهذا الحساب', 400);
+        }
       }
 
       delete invoiceData.discountPercent;
@@ -137,6 +165,7 @@ export async function POST(request: Request) {
           status: invoiceData.status,
           paymentStatus: invoiceData.paymentStatus,
           paidAmount: invoiceData.paidAmount,
+          cashboxId,
           paymentTermsDays: invoiceData.paymentTermsDays,
           issueDate: invoiceData.issueDate ? new Date(invoiceData.issueDate) : undefined,
           purchaseRepId: invoiceData.purchaseRepId,
@@ -158,11 +187,13 @@ export async function POST(request: Request) {
           discountPercent?: number;
           taxRate?: number;
           description?: string;
+          warehouseId?: string | null;
         }) => ({
           productId: item.productId,
           quantity: Number(item.quantity),
           price: Number(item.price),
           unitCost: item.unitCost ?? Number(item.price),
+          warehouseId: item.warehouseId,
           discountPercent: item.discountPercent,
           taxRate: item.taxRate,
           description: item.description,
@@ -171,7 +202,7 @@ export async function POST(request: Request) {
         userId: user.id,
       });
 
-      const invoice = result.invoice;
+      let invoice = result.invoice;
       if (result.journalEntry?.id) {
         await dualRunCompareById('PurchaseInvoice:POST', result.journalEntry.id);
       }
@@ -204,7 +235,7 @@ export async function POST(request: Request) {
         const status = error.code === 'INVENTORY_FAILED' ? 409 : error.code === 'VALIDATION_FAILED' ? 400 : 500;
         return apiError(error.message, status);
       }
-      const msg = translatePurchaseError(error);
+      const msg = translatePurchaseError(toArabicError(error));
       return apiError(msg, 500);
     }
   }
@@ -329,10 +360,11 @@ export async function DELETE(request: Request) {
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
     try {
-      const result = await executeDeletePurchaseInvoice({
+      const result = await executeDeleteInvoice({
         invoiceId: id,
         tenantId: user.tenantId,
         userId: user.id,
+        invoiceType: 'purchase',
       });
 
       await logAuditAction(

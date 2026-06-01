@@ -4,7 +4,7 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { InvoiceExecutionError } from '@/lib/services/invoice-execution.service';
+import { InvoiceExecutionError } from '@/lib/services/execution-errors';
 import { getPostingProfile } from '@/lib/services/accounting-posting-profile.service';
 import { postJournalLinesInTransaction } from '@/lib/services/invoice-accounting.service';
 import {
@@ -21,6 +21,7 @@ import {
 } from '@/lib/services/inventory-movement.service';
 import { assertCanPostReference } from '@/lib/services/posting-guard.service';
 import { reverseJournalEntriesByReferenceId } from '@/lib/services/journal-reversal.service';
+import { toArabicError } from '@/lib/utils/arabic-errors';
 
 export type ProductionExecutionError = InvoiceExecutionError;
 
@@ -216,18 +217,18 @@ export async function executeApproveProductionOrder(params: {
   });
 
   if (!order) {
-    throw new InvoiceExecutionError('VALIDATION_FAILED', 'Production order not found');
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'أمر الإنتاج غير موجود');
   }
   if (order.status !== 'pending') {
     throw new InvoiceExecutionError(
       'VALIDATION_FAILED',
-      `Cannot approve order in status ${order.status}`,
+      `لا يمكن اعتماد أمر إنتاج حالته ${order.status}`,
     );
   }
 
   const wip = order.workInProgress;
   if (!wip) {
-    throw new InvoiceExecutionError('VALIDATION_FAILED', 'WIP record missing');
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'بيانات تكلفة أمر الإنتاج غير مكتملة');
   }
 
   const profile = await getPostingProfile(params.tenantId);
@@ -283,26 +284,26 @@ export async function executeCompleteProductionOrder(params: {
   });
 
   if (!order) {
-    throw new InvoiceExecutionError('VALIDATION_FAILED', 'Production order not found');
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'أمر الإنتاج غير موجود');
   }
   if (order.status === 'completed') {
-    throw new InvoiceExecutionError('VALIDATION_FAILED', 'Order already completed');
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'أمر الإنتاج مكتمل بالفعل');
   }
   if (order.status !== 'waiting' && order.status !== 'approved') {
     throw new InvoiceExecutionError(
       'VALIDATION_FAILED',
-      `Cannot complete from status ${order.status}`,
+      `لا يمكن إكمال أمر إنتاج حالته ${order.status}`,
     );
   }
 
   const outputQty = params.actualOutputQuantity;
   if (outputQty <= 0) {
-    throw new InvoiceExecutionError('VALIDATION_FAILED', 'Output quantity must be positive');
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'كمية الإنتاج الفعلية يجب أن تكون أكبر من صفر');
   }
 
   const wip = order.workInProgress;
   if (!wip) {
-    throw new InvoiceExecutionError('VALIDATION_FAILED', 'WIP record missing');
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'بيانات تكلفة أمر الإنتاج غير مكتملة');
   }
 
   const profile = await getPostingProfile(params.tenantId);
@@ -319,13 +320,6 @@ export async function executeCompleteProductionOrder(params: {
         order.id,
       );
 
-      await applyProductionFinishedInflow(
-        tx,
-        params.tenantId,
-        { productId: order.productId, quantity: outputQty, unitCost },
-        order.id,
-      );
-
       const completeLines = buildProductionCompletionLines(wip.totalCost, params.tenantId, profile);
       await postJournalLinesInTransaction(tx, {
         tenantId: params.tenantId,
@@ -337,6 +331,13 @@ export async function executeCompleteProductionOrder(params: {
         lines: completeLines,
         correlationId: `${order.id}:complete`,
       });
+
+      await applyProductionFinishedInflow(
+        tx,
+        params.tenantId,
+        { productId: order.productId, quantity: outputQty, unitCost },
+        order.id,
+      );
 
       if (waste > 0) {
         await tx.productionWaste.create({
@@ -364,6 +365,54 @@ export async function executeCompleteProductionOrder(params: {
           produced: outputQty,
           remaining: 0,
           cost: wip.totalCost,
+        },
+        include: { items: true, product: true, workInProgress: true, productionLine: true },
+      });
+    },
+    { isolationLevel: 'Serializable', maxWait: 15000, timeout: 60000 },
+  );
+}
+
+export async function executeCancelProductionOrder(params: {
+  tenantId: string;
+  userId: string;
+  productionOrderId: string;
+}) {
+  const order = await prisma.productionOrder.findFirst({
+    where: { id: params.productionOrderId, tenantId: params.tenantId },
+    include: { items: true, workInProgress: true },
+  });
+
+  if (!order) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'Production order not found');
+  }
+  if (order.status === 'completed') {
+    throw new InvoiceExecutionError(
+      'VALIDATION_FAILED',
+      'Cannot cancel a completed production order. Use a controlled reversal flow.',
+    );
+  }
+  if (order.status === 'cancelled') {
+    return order;
+  }
+
+  return prisma.$transaction(
+    async tx => {
+      await reverseJournalEntriesByReferenceId(tx, params.tenantId, order.id, 'ProductionOrder');
+      await reverseInvoiceStockMovements(tx, params.tenantId, order.id, ['ProductionOrder']);
+      await tx.productionWaste.deleteMany({ where: { productionOrderId: order.id } });
+      await tx.workInProgress.updateMany({
+        where: { productionOrderId: order.id },
+        data: { status: 'cancelled' },
+      });
+
+      return tx.productionOrder.update({
+        where: { id: order.id },
+        data: {
+          status: 'cancelled',
+          actualOutputQuantity: 0,
+          produced: 0,
+          remaining: order.plannedQuantity || order.quantity,
         },
         include: { items: true, product: true, workInProgress: true, productionLine: true },
       });
@@ -415,11 +464,15 @@ export function mapProductionError(error: unknown): {
     };
     return {
       status: statusMap[error.code],
-      body: { error: error.message, code: error.code, details: error.cause?.message },
+      body: {
+        error: toArabicError(error.message, 'فشلت عملية التصنيع، حاول مرة أخرى'),
+        code: error.code,
+        details: error.cause?.message ? toArabicError(error.cause.message, error.cause.message) : undefined,
+      },
     };
   }
   return {
     status: 500,
-    body: { error: 'Production transaction failed', code: 'TRANSACTION_FAILED' },
+    body: { error: toArabicError(error, 'فشلت عملية التصنيع، حاول مرة أخرى'), code: 'TRANSACTION_FAILED' },
   };
 }

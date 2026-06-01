@@ -17,6 +17,7 @@ export function mapExecutionItems(rawItems: unknown[]): ExecutionInvoiceItem[] {
       quantity: Number(it.quantity) || 0,
       price: Number(it.price ?? it.unitCost) || 0,
       unitCost: it.unitCost != null ? Number(it.unitCost) : undefined,
+      warehouseId: it.warehouseId != null ? String(it.warehouseId) : undefined,
       discountPercent: it.discountPercent != null ? Number(it.discountPercent) : undefined,
       taxRate: it.taxRate != null ? Number(it.taxRate) : undefined,
       description: it.description != null ? String(it.description) : undefined,

@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
+import { asArray } from '@/lib/api/safe-array';
 import { SupplierForm, type SupplierExisting } from '@/components/suppliers/SupplierForm';
 import { ErrorBanner } from '@/components/ui/patterns';
 
@@ -16,10 +17,10 @@ export default function EditSupplierPage() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    apiGet<SupplierExisting[]>('/api/suppliers')
-      .then(list => {
+    apiGetList<SupplierExisting>('/api/suppliers')
+      .then((list) => {
         if (!active) return;
-        const found = list.find(s => s.id === id);
+        const found = asArray<SupplierExisting>(list).find((s) => s.id === id);
         if (found) setData(found);
         else setError('المورد غير موجود');
       })

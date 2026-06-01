@@ -101,7 +101,7 @@ export function InvoicePrintTemplate({ data }: { data: InvoicePrintData }) {
       <header className="text-center border-b-2 border-slate-900 pb-4 mb-6">
         <h1 className="text-4xl font-extrabold tracking-tight">{headerLabel}</h1>
         {data.company?.name && (
-          <p className="text-xl font-semibold text-blue-700 mt-2">{data.company.name}</p>
+          <p className="text-xl font-semibold text-emerald-800 mt-2">{data.company.name}</p>
         )}
         {data.company?.address && (
           <p className="text-sm text-slate-600 mt-1">{data.company.address}</p>
@@ -205,7 +205,7 @@ export function InvoicePrintTemplate({ data }: { data: InvoicePrintData }) {
             )}
             <tr className="border-t border-slate-900">
               <td className="py-2 pl-6 font-bold">الإجمالي</td>
-              <td className="py-2 text-left font-bold tabular-nums text-blue-700">{fmtMoney(data.grandTotal, c)}</td>
+              <td className="py-2 text-left font-bold tabular-nums text-emerald-800">{fmtMoney(data.grandTotal, c)}</td>
             </tr>
             <tr>
               <td className="py-1 pl-6 text-slate-600">مدفوع</td>

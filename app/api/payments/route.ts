@@ -35,6 +35,7 @@ export async function GET(request: Request) {
         supplier: { select: { id: true, code: true, nameAr: true } },
         salesInvoice: { select: { id: true, invoiceNumber: true, total: true } },
         purchaseInvoice: { select: { id: true, invoiceNumber: true, total: true } },
+        cashbox: { select: { id: true, code: true, name: true, currentBalance: true } },
         allocations: true,
       },
       orderBy: { date: 'desc' },
@@ -53,13 +54,14 @@ export async function POST(request: Request) {
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر', 400);
 
     const body = await request.json();
-    const { amount, date, type, customerId, supplierId, salesInvoiceId, purchaseInvoiceId, notes, allocations } =
+    const { amount, date, type, customerId, supplierId, salesInvoiceId, purchaseInvoiceId, cashboxId, notes, allocations } =
       body;
 
     if (!amount || Number(amount) <= 0) return apiError('المبلغ مطلوب', 400);
     if (!type || (type !== 'incoming' && type !== 'outgoing')) {
       return apiError('نوع الدفع غير صالح', 400);
     }
+    if (!cashboxId) return apiError('يجب اختيار الخزنة عند تسجيل مبلغ مدفوع', 400);
 
     if (salesInvoiceId) {
       const v = await validatePaymentAmount(salesInvoiceId, 'sales', Number(amount));
@@ -80,6 +82,7 @@ export async function POST(request: Request) {
       supplierId,
       salesInvoiceId,
       purchaseInvoiceId,
+      cashboxId,
       notes,
       allocations,
     });
@@ -103,7 +106,7 @@ export async function POST(request: Request) {
       after: result.payment,
     });
 
-    return apiSuccess(result.payment, 'Payment created successfully');
+    return apiSuccess(result.payment, 'تم تسجيل الدفعة بنجاح');
   } catch (error) {
     if (error instanceof PaymentExecutionError) return apiError(error.message, 400);
     return handleApiError(error, 'Create payment');
@@ -117,7 +120,7 @@ export async function PUT(request: Request) {
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر', 400);
 
     const body = await request.json();
-    const { id, amount, date, type, notes, allocations, reverse } = body;
+    const { id, amount, date, type, notes, allocations, cashboxId, reverse } = body;
 
     if (!id) return apiError('معرف الدفع مطلوب', 400);
 
@@ -127,7 +130,7 @@ export async function PUT(request: Request) {
         userId: user.id,
         paymentId: id,
       });
-      return apiSuccess(result.payment, 'Payment reversed');
+      return apiSuccess(result.payment, 'تم عكس الدفعة');
     }
 
     const result = await executeUpdatePayment({
@@ -139,6 +142,7 @@ export async function PUT(request: Request) {
       type,
       notes,
       allocations,
+      cashboxId,
     });
 
     await logAuditAction(
@@ -152,7 +156,7 @@ export async function PUT(request: Request) {
       request.headers.get('user-agent') || undefined,
     );
 
-    return apiSuccess(result.payment, 'Payment updated successfully');
+    return apiSuccess(result.payment, 'تم تحديث الدفعة بنجاح');
   } catch (error) {
     if (error instanceof PaymentExecutionError) return apiError(error.message, 400);
     return handleApiError(error, 'Update payment');

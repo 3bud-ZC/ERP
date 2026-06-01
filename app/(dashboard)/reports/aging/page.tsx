@@ -52,6 +52,7 @@ export default function AgingReportPage() {
         title={type === 'ar' ? 'تقرير أعمار الذمم المدينة (العملاء)' : 'تقرير أعمار الذمم الدائنة (الموردين)'}
         subtitle="موزعة على فترات الاستحقاق"
         periodLabel={`بتاريخ ${new Date(asOf).toLocaleDateString('ar-EG')}`}
+        exportConfig={{ report: 'aging', params: { type, asOfDate: asOf } }}
         loading={reportQ.isLoading}
         error={reportQ.error ? (reportQ.error as Error).message : null}
         filters={
@@ -73,7 +74,7 @@ export default function AgingReportPage() {
         {data && (
           <>
             <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-              <ReportSummaryCard label="الإجمالي" value={fmtMoneyEGP(data.summary.totalOutstanding)} accent="bg-blue-50 border-blue-200" />
+              <ReportSummaryCard label="الإجمالي" value={fmtMoneyEGP(data.summary.totalOutstanding)} accent="bg-emerald-50 border-emerald-200" />
               {Object.entries(data.summary.agingBuckets).map(([k, v]) => (
                 <ReportSummaryCard key={k} label={BUCKET_LABELS[k] ?? k} value={fmtMoneyEGP(v)}
                   accent={k === 'current' ? 'bg-emerald-50 border-emerald-200' : k === '90+' ? 'bg-red-50 border-red-200' : undefined} />

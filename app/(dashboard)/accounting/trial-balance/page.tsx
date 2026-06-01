@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import {
   Scale,
   CheckCircle,
@@ -11,6 +11,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { AccountingLayout, KpiCard } from '@/components/accounting/AccountingLayout';
+import { AccountingQuickNav } from '@/components/accounting/AccountingQuickNav';
 
 interface TrialBalanceRow {
   account: string;
@@ -52,8 +53,8 @@ export default function TrialBalancePage() {
 
   const trialQ = useQuery({
     queryKey: ['accounting', 'trial-balance', asOfDate],
-    queryFn: () => apiGet<TrialBalanceRow[]>(`/api/accounting/trial-balance?asOfDate=${asOfDate}`),
-    staleTime: 30_000,
+    queryFn: () => apiGetList<TrialBalanceRow>(`/api/accounting/trial-balance?asOfDate=${asOfDate}`),
+    staleTime: 0,
   });
   const rows = useMemo(() => trialQ.data ?? [], [trialQ.data]);
   const loading = trialQ.isLoading;
@@ -67,6 +68,36 @@ export default function TrialBalancePage() {
     }
     return { totalDebit, totalCredit, isBalanced: Math.abs(totalDebit - totalCredit) < 0.01 };
   }, [rows]);
+
+  function printReport() {
+    const printable = document.getElementById('trial-balance-printable')?.innerHTML ?? '';
+    const win = window.open('', '_blank', 'width=1100,height=800');
+    if (!win) {
+      window.print();
+      return;
+    }
+    win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8" /><title>ميزان المراجعة</title><style>@page{margin:12mm}body{font-family:Arial,Tahoma,sans-serif;color:#0f172a;direction:rtl}h1{font-size:20px;margin:0 0 6px}.muted{font-size:12px;color:#64748b;margin-bottom:14px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #e2e8f0;padding:7px 8px;text-align:right}th{background:#f1f5f9}.cards{display:none}</style></head><body><h1>ميزان المراجعة</h1><div class="muted">حتى ${asOfDate} - تاريخ الطباعة ${new Date().toLocaleDateString('ar-EG')}</div>${printable}</body></html>`);
+    win.document.close();
+    win.focus();
+    setTimeout(() => {
+      win.print();
+      win.close();
+    }, 300);
+  }
+
+  function exportExcel() {
+    const printable = document.getElementById('trial-balance-table')?.outerHTML;
+    if (!printable) return;
+    const blob = new Blob([`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8" /></head><body>${printable}</body></html>`], {
+      type: 'application/vnd.ms-excel;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ميزان-المراجعة-${asOfDate}.xls`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <AccountingLayout
@@ -85,14 +116,20 @@ export default function TrialBalancePage() {
             <RefreshCw className={`w-4 h-4 ${trialQ.isFetching ? 'animate-spin' : ''}`} />
             تحديث
           </button>
-          <button onClick={() => window.print()}
-            className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium">
+          <button onClick={exportExcel}
+            className="flex items-center gap-2 px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors text-sm text-slate-700">
+            Excel
+          </button>
+          <button onClick={printReport}
+            className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium">
             <Printer className="w-4 h-4" />
             طباعة
           </button>
         </>
       }
     >
+      <div className="text-xs text-slate-500" dir="rtl">المحاسبة &gt; ميزان المراجعة</div>
+
       {errMsg && (
         <div className="text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2">
           {errMsg}
@@ -138,8 +175,8 @@ export default function TrialBalancePage() {
           <p className="text-sm text-slate-400 mt-1">سيظهر ميزان المراجعة بعد ترحيل القيود اليومية</p>
         </div>
       ) : (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <table className="w-full text-sm">
+        <div id="trial-balance-printable" className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <table id="trial-balance-table" className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 w-32">رمز الحساب</th>
@@ -187,6 +224,8 @@ export default function TrialBalancePage() {
           </table>
         </div>
       )}
+
+      <AccountingQuickNav />
     </AccountingLayout>
   );
 }

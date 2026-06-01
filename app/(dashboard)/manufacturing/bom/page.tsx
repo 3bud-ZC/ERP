@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { Layers, Search, ChevronLeft, Package } from 'lucide-react';
 import { TableSkeleton, EmptyState, ErrorBanner } from '@/components/ui/patterns';
 import { ManufacturingLayout } from '@/components/manufacturing/ManufacturingLayout';
@@ -30,12 +30,12 @@ const TABLE_COLS = ['w-32', 'w-32', 'w-24', 'w-24'];
 export default function BOMHubPage() {
   const productsQ = useQuery({
     queryKey: ['products'],
-    queryFn:  () => apiGet<ProductLite[]>('/api/products'),
+    queryFn:  () => apiGetList<ProductLite>('/api/products'),
     staleTime: 60_000,
   });
   const bomQ = useQuery({
     queryKey: ['bom'],
-    queryFn:  () => apiGet<BOMItemEntry[]>('/api/bom'),
+    queryFn:  () => apiGetList<BOMItemEntry>('/api/bom'),
     staleTime: 30_000,
   });
 
@@ -85,7 +85,7 @@ export default function BOMHubPage() {
           <Search className="absolute right-3 top-2.5 w-4 h-4 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="بحث بالمنتج…"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
         </div>
       </div>
 

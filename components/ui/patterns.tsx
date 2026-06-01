@@ -8,9 +8,9 @@ import { AlertCircle, CheckCircle, Inbox, RefreshCw, type LucideIcon } from 'luc
  *
  * Use these components instead of inlining skeleton/empty/error/toast markup.
  * All patterns share the same visual language:
- *   - slate-* color scale
- *   - rounded-xl containers
- *   - bg-white shadow-sm border-slate-100 cards
+ *   - navy/emerald OG ERP color scale
+ *   - compact containers
+ *   - bg-white shadow-sm border-slate-200 cards
  *   - Arabic-first messaging
  */
 
@@ -22,8 +22,8 @@ export function Sk({ className = '' }: { className?: string }) {
 /* ─── Configurable table skeleton ─────────────────────────── */
 export function TableSkeleton({ cols, rows = 6 }: { cols: string[]; rows?: number }) {
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden animate-pulse">
-      <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex gap-6">
+    <div className="neo-raised rounded-2xl overflow-hidden animate-pulse">
+      <div className="bg-slate-100/50 px-4 py-3 flex gap-6">
         {cols.map((w, i) => (
           <div key={i} className={`${w} h-3.5 bg-slate-200 rounded`} />
         ))}
@@ -42,7 +42,7 @@ export function TableSkeleton({ cols, rows = 6 }: { cols: string[]; rows?: numbe
 /* ─── Form skeleton ───────────────────────────────────────── */
 export function FormSkeleton({ rows = 5 }: { rows?: number }) {
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6 space-y-5 animate-pulse">
+    <div className="neo-raised rounded-2xl p-6 space-y-5 animate-pulse">
       {Array.from({ length: rows }).map((_, i) => (
         <div key={i} className="space-y-2">
           <div className="h-3 w-24 bg-slate-200 rounded" />
@@ -63,7 +63,7 @@ export function CardGridSkeleton({ cols = 2, count = 4 }: { cols?: number; count
   return (
     <div className={`grid grid-cols-1 ${colsCls} gap-4 animate-pulse`}>
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 space-y-3">
+        <div key={i} className="neo-raised rounded-2xl p-5 space-y-3">
           <div className="h-5 w-32 bg-slate-200 rounded" />
           <div className="h-3 w-24 bg-slate-100 rounded" />
           <div className="h-3 w-40 bg-slate-100 rounded" />
@@ -86,9 +86,9 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-16 text-center">
-      <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-3">
-        <Icon className="w-6 h-6 text-slate-400" />
+    <div className="neo-raised rounded-2xl p-16 text-center">
+      <div className="w-12 h-12 neo-inset rounded-xl flex items-center justify-center mx-auto mb-3">
+        <Icon className="w-6 h-6 text-indigo-700" />
       </div>
       <p className="text-slate-600 font-medium">{title}</p>
       {description && <p className="text-slate-400 text-sm mt-1">{description}</p>}
@@ -100,7 +100,7 @@ export function EmptyState({
 /* ─── Inline error banner with retry ──────────────────────── */
 export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="flex items-center gap-3 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">
+    <div className="flex items-center gap-3 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-[10px] text-sm">
       <AlertCircle className="w-4 h-4 shrink-0" />
       <span className="flex-1">{message}</span>
       {onRetry && (
@@ -115,7 +115,7 @@ export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: (
 /* ─── Full-state error block (for inside detail pages) ────── */
 export function ErrorBlock({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-16 text-center">
+    <div className="neo-raised rounded-2xl p-16 text-center">
       <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-3">
         <AlertCircle className="w-6 h-6 text-red-500" />
       </div>
@@ -136,8 +136,8 @@ type ToastState = { msg: string; type: 'success' | 'error' } | null;
 export function Toast({ toast }: { toast: ToastState }) {
   if (!toast) return null;
   return (
-    <div className={`fixed top-5 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-2 px-5 py-3 rounded-xl shadow-xl text-white text-sm font-medium animate-slideIn
-      ${toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'}`}>
+    <div className={`fixed top-5 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-2 px-5 py-3 rounded-[10px] shadow-xl text-white text-sm font-medium animate-slideIn
+      ${toast.type === 'success' ? 'bg-emerald-600' : 'bg-red-600'}`}>
       {toast.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
       {toast.msg}
     </div>

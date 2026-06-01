@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { Plus, AlertTriangle, Trash2, Search } from 'lucide-react';
 import { TableSkeleton, EmptyState, ErrorBanner, Toast, useToast } from '@/components/ui/patterns';
 import { ManufacturingLayout } from '@/components/manufacturing/ManufacturingLayout';
@@ -28,7 +28,7 @@ export default function WasteListPage() {
 
   const wasteQ = useQuery({
     queryKey: ['production-waste'],
-    queryFn:  () => apiGet<WasteEntry[]>('/api/production-waste'),
+    queryFn:  () => apiGetList<WasteEntry>('/api/production-waste'),
     staleTime: 30_000,
   });
   const wastes = useMemo(() => wasteQ.data ?? [], [wasteQ.data]);
@@ -84,7 +84,7 @@ export default function WasteListPage() {
       subtitle={loading ? 'جاري التحميل…' : `${wastes.length} سجل · إجمالي الكمية ${totalQty.toLocaleString('ar-EG')}`}
       toolbar={
         <Link href="/manufacturing/waste/new"
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium">
+          className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium">
           <Plus className="w-4 h-4" /> تسجيل فاقد
         </Link>
       }
@@ -96,7 +96,7 @@ export default function WasteListPage() {
           <Search className="absolute right-3 top-2.5 w-4 h-4 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="بحث بالمنتج أو رقم الأمر…"
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
         </div>
       </div>
 

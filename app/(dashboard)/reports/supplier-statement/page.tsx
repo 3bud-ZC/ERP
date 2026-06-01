@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import {
   ReportShell, ReportLabel, reportInputCls, fmtMoneyEGP, ReportSummaryCard,
@@ -43,7 +43,7 @@ export default function SupplierStatementPage() {
 
   const suppliersQ = useQuery({
     queryKey: ['suppliers'],
-    queryFn:  () => apiGet<SupplierLite[]>('/api/suppliers'),
+    queryFn:  () => apiGetList<SupplierLite>('/api/suppliers'),
     staleTime: 60_000,
   });
   const suppliers = useMemo(() => suppliersQ.data ?? [], [suppliersQ.data]);
@@ -67,6 +67,7 @@ export default function SupplierStatementPage() {
         title={data ? `كشف حساب — ${data.supplier.nameAr}` : 'كشف حساب مورد'}
         subtitle={data ? `الرمز: ${data.supplier.code}` : undefined}
         periodLabel={periodLabel}
+        exportConfig={{ report: 'supplier-statement', params: { supplierId, fromDate: from, toDate: to }, enabled: !!supplierId }}
         loading={statementQ.isLoading}
         error={statementQ.error ? (statementQ.error as Error).message : null}
         filters={
@@ -98,7 +99,7 @@ export default function SupplierStatementPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <ReportSummaryCard label="رصيد افتتاحي" value={fmtMoneyEGP(data.openingBalance)} />
               <ReportSummaryCard label="إجمالي الفواتير" value={fmtMoneyEGP(data.summary.totalInvoices)} accent="bg-emerald-50 border-emerald-200" />
-              <ReportSummaryCard label="إجمالي المدفوعات" value={fmtMoneyEGP(data.summary.totalPayments)} accent="bg-blue-50 border-blue-200" />
+              <ReportSummaryCard label="إجمالي المدفوعات" value={fmtMoneyEGP(data.summary.totalPayments)} accent="bg-emerald-50 border-emerald-200" />
               <ReportSummaryCard label="الرصيد الختامي" value={fmtMoneyEGP(data.summary.closingBalance)} accent="bg-amber-50 border-amber-200" />
             </div>
 

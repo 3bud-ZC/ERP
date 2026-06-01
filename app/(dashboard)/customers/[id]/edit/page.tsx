@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
+import { asArray } from '@/lib/api/safe-array';
 import { CustomerForm, type CustomerExisting } from '@/components/customers/CustomerForm';
 import { ErrorBanner } from '@/components/ui/patterns';
 
@@ -16,10 +17,10 @@ export default function EditCustomerPage() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    apiGet<CustomerExisting[]>('/api/customers')
-      .then(list => {
+    apiGetList<CustomerExisting>('/api/customers')
+      .then((list) => {
         if (!active) return;
-        const found = list.find(c => c.id === id);
+        const found = asArray<CustomerExisting>(list).find((c) => c.id === id);
         if (found) setData(found);
         else setError('العميل غير موجود');
       })

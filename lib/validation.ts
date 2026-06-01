@@ -24,12 +24,12 @@ export async function validateStockAvailability(items: StockItem[]): Promise<{ v
     });
 
     if (!product) {
-      errors.push(`Product ${item.productId} not found`);
+      errors.push('المنتج غير موجود');
       continue;
     }
 
     if (product.stock < item.quantity) {
-      errors.push(`Insufficient stock for product ${product.code} - ${product.nameAr}. Available: ${product.stock}, Required: ${item.quantity}`);
+      errors.push(`الكمية غير متوفرة للمنتج ${product.code} - ${product.nameAr}. المتاح: ${product.stock}، المطلوب: ${item.quantity}`);
     }
   }
 
@@ -53,12 +53,12 @@ export async function validateRawMaterialAvailability(bomItems: BOMItem[]): Prom
     });
 
     if (!material) {
-      errors.push(`Raw material ${item.materialId} not found`);
+      errors.push('المادة الخام غير موجودة');
       continue;
     }
 
     if (material.stock < item.quantity) {
-      errors.push(`Insufficient raw material ${material.code} - ${material.nameAr}. Available: ${material.stock}, Required: ${item.quantity}`);
+      errors.push(`المادة الخام ${material.code} - ${material.nameAr} غير كافية. المتاح: ${material.stock}، المطلوب: ${item.quantity}`);
     }
   }
 
@@ -80,7 +80,7 @@ export async function validatePaymentAmount(invoiceId: string, invoiceType: 'sal
     });
 
     if (!invoice) {
-      return { valid: false, error: 'Sales invoice not found' };
+      return { valid: false, error: 'فاتورة البيع غير موجودة' };
     }
 
     const due       = invoice.grandTotal || invoice.total;
@@ -98,7 +98,7 @@ export async function validatePaymentAmount(invoiceId: string, invoiceType: 'sal
     });
 
     if (!invoice) {
-      return { valid: false, error: 'Purchase invoice not found' };
+      return { valid: false, error: 'فاتورة الشراء غير موجودة' };
     }
 
     const due = invoice.grandTotal || invoice.total;
@@ -124,13 +124,13 @@ export async function preventNegativeStock(productId: string, quantityChange: nu
   });
 
   if (!product) {
-    return { valid: false, error: `Product ${productId} not found` };
+    return { valid: false, error: 'المنتج غير موجود' };
   }
 
   if (product.stock + quantityChange < 0) {
     return { 
       valid: false, 
-      error: `Operation would result in negative stock for product ${product.code} - ${product.nameAr}. Current: ${product.stock}, Change: ${quantityChange}` 
+      error: `لا يمكن تنفيذ العملية لأنها ستجعل مخزون ${product.code} - ${product.nameAr} بالسالب. الرصيد الحالي: ${product.stock}` 
     };
   }
 
@@ -159,7 +159,8 @@ export function validatePaymentStatus(status: string): boolean {
 export function validateProductionStatusTransition(currentStatus: string, newStatus: string): { valid: boolean; error?: string } {
   const validTransitions: Record<string, string[]> = {
     pending: ['approved', 'cancelled'],
-    approved: ['waiting', 'cancelled'],
+    approved: ['waiting', 'completed', 'cancelled'],
+    in_progress: ['completed', 'cancelled'],
     waiting: ['completed', 'cancelled'],
     completed: [],
     cancelled: []
@@ -168,9 +169,20 @@ export function validateProductionStatusTransition(currentStatus: string, newSta
   const allowedTransitions = validTransitions[currentStatus] || [];
   
   if (!allowedTransitions.includes(newStatus)) {
+    const labels: Record<string, string> = {
+      pending: 'معلّق',
+      approved: 'معتمد',
+      waiting: 'في الانتظار',
+      in_progress: 'قيد التنفيذ',
+      completed: 'مكتمل',
+      cancelled: 'ملغى',
+    };
+    const fromLabel = labels[currentStatus] || currentStatus;
+    const toLabel = labels[newStatus] || newStatus;
+    const allowed = allowedTransitions.map(s => labels[s] || s).join('، ');
     return {
       valid: false,
-      error: `Invalid status transition from ${currentStatus} to ${newStatus}. Allowed transitions: ${allowedTransitions.join(', ')}`
+      error: `لا يمكن نقل أمر الإنتاج من "${fromLabel}" إلى "${toLabel}". الحالات المسموحة: ${allowed || 'لا يوجد'}`
     };
   }
 

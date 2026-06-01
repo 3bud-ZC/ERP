@@ -1,7 +1,7 @@
-import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
-import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
+import { getAuthenticatedUser } from '@/lib/auth';
+import { hasReportAccess } from '@/lib/reports/report-access';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
@@ -12,7 +12,8 @@ export async function GET(request: Request) {
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
-    if (!checkPermission(user, 'view_accounting')) return apiError('ليس لديك صلاحية', 403);
+    if (!hasReportAccess(user, 'supplier-statement')) return apiError('ليس لديك صلاحية لعرض كشف حساب المورد', 403);
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
     const { searchParams } = new URL(request.url);
     const supplierId = searchParams.get('supplierId');
@@ -20,21 +21,21 @@ export async function GET(request: Request) {
     const toDate = searchParams.get('toDate') ? new Date(searchParams.get('toDate')!) : new Date();
 
     if (!supplierId) {
-      return apiError('Supplier ID is required', 400);
+      return apiError('يجب اختيار مورد', 400);
     }
+    const tenantId = user.tenantId;
 
-    // Get supplier details
-    const supplier = await prisma.supplier.findUnique({
-      where: { id: supplierId },
+    const supplier = await prisma.supplier.findFirst({
+      where: { id: supplierId, tenantId },
     });
 
     if (!supplier) {
-      return apiError('Supplier not found', 404);
+      return apiError('المورد غير موجود', 404);
     }
 
-    // Get purchase invoices
     const purchaseInvoices = await prisma.purchaseInvoice.findMany({
       where: {
+        tenantId,
         supplierId,
         date: { gte: fromDate, lte: toDate },
       },
@@ -45,27 +46,27 @@ export async function GET(request: Request) {
       orderBy: { date: 'asc' },
     });
 
-    // Get purchase returns
     const purchaseReturns = await prisma.purchaseReturn.findMany({
       where: {
+        tenantId,
         supplierId,
         date: { gte: fromDate, lte: toDate },
       },
       orderBy: { date: 'asc' },
     });
 
-    // Get payments
     const payments = await prisma.payment.findMany({
       where: {
+        tenantId,
         supplierId,
         date: { gte: fromDate, lte: toDate },
       },
       orderBy: { date: 'asc' },
     });
 
-    // Calculate opening balance
     const openingBalance = await prisma.purchaseInvoice.aggregate({
       where: {
+        tenantId,
         supplierId,
         date: { lt: fromDate },
       },
@@ -74,6 +75,7 @@ export async function GET(request: Request) {
 
     const openingPayments = await prisma.payment.aggregate({
       where: {
+        tenantId,
         supplierId,
         date: { lt: fromDate },
       },
@@ -89,53 +91,48 @@ export async function GET(request: Request) {
 
     const closingBalance = openingBalanceAmount + totalInvoices - totalReturns - totalPayments;
 
-    // Build transaction list
     const transactions: any[] = [];
     let runningBalance = openingBalanceAmount;
 
-    // Add invoices
     purchaseInvoices.forEach((invoice: any) => {
       runningBalance += invoice.total;
       transactions.push({
         date: invoice.date,
         type: 'invoice',
         reference: invoice.invoiceNumber,
-        description: `Purchase Invoice ${invoice.invoiceNumber}`,
+        description: `فاتورة مشتريات ${invoice.invoiceNumber}`,
         debit: invoice.total,
         credit: 0,
         balance: runningBalance,
       });
     });
 
-    // Add returns
     purchaseReturns.forEach((ret: any) => {
       runningBalance -= ret.total;
       transactions.push({
         date: ret.date,
         type: 'return',
         reference: ret.returnNumber,
-        description: `Supplier Credit ${ret.returnNumber}`,
+        description: `إشعار دائن مورد ${ret.returnNumber}`,
         debit: 0,
         credit: ret.total,
         balance: runningBalance,
       });
     });
 
-    // Add payments
     payments.forEach((payment: any) => {
       runningBalance -= payment.amount;
       transactions.push({
         date: payment.date,
         type: 'payment',
         reference: payment.id,
-        description: 'Payment made',
+        description: 'سداد دفعة',
         debit: 0,
         credit: payment.amount,
         balance: runningBalance,
       });
     });
 
-    // Sort transactions by date
     transactions.sort((a, b) => a.date.getTime() - b.date.getTime());
 
     return apiSuccess(
@@ -159,9 +156,9 @@ export async function GET(request: Request) {
           closingBalance,
         },
       },
-      'Supplier statement generated successfully'
+      'تم إنشاء كشف حساب المورد بنجاح'
     );
   } catch (error) {
-    return handleApiError(error, 'Generate supplier statement');
+    return handleApiError(error, 'Supplier statement');
   }
 }

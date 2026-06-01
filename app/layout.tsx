@@ -1,10 +1,21 @@
 import type { Metadata } from "next";
+import { Baloo_Bhaijaan_2 } from "next/font/google";
 import "./globals.css";
 import { AppProviders } from "@/components/providers/AppProviders";
+import { BRAND } from "@/lib/branding";
+
+const baloo = Baloo_Bhaijaan_2({
+  subsets: ['arabic', 'latin'],
+  display: 'swap',
+  variable: '--font-baloo',
+});
 
 export const metadata: Metadata = {
-  title: "نظام ERP - مصنع البلاستيك",
-  description: "نظام إدارة موارد المؤسسة لمصنع البلاستيك",
+  title: {
+    default: `${BRAND.name} | نظام إدارة موارد المؤسسة`,
+    template: `%s | ${BRAND.name}`,
+  },
+  description: BRAND.description,
 };
 
 export default function RootLayout({
@@ -14,7 +25,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ar" dir="rtl">
-      <body className="font-cairo antialiased">
+      <body className={`${baloo.variable} font-jakarta antialiased`}>
         <AppProviders>{children}</AppProviders>
       </body>
     </html>

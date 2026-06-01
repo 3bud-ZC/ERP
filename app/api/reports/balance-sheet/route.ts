@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser } from '@/lib/auth';
+import { hasReportAccess } from '@/lib/reports/report-access';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -11,6 +12,7 @@ export async function GET(request: Request) {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر', 400);
+    if (!hasReportAccess(user, 'balance-sheet')) return apiError('ليس لديك صلاحية لعرض تقرير الميزانية العمومية', 403);
 
     const { searchParams } = new URL(request.url);
     const asOfDate = searchParams.get('asOfDate')
@@ -125,7 +127,7 @@ export async function GET(request: Request) {
         isBalanced,
         difference,
       },
-    }, 'Balance sheet fetched');
+    }, 'تم جلب تقرير الميزانية العمومية بنجاح');
   } catch (error) {
     return handleApiError(error, 'Balance sheet report');
   }

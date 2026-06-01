@@ -9,10 +9,13 @@ export function QueryProvider({ children }: { children: ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 30_000,
+            // Operational ERP pages need near real-time freshness.
+            // Mutations invalidate affected keys explicitly as well.
+            staleTime: 0,
             gcTime: 5 * 60_000,
-            refetchOnWindowFocus: false,
+            refetchOnWindowFocus: true,
             refetchOnReconnect: true,
+            refetchOnMount: 'always',
             retry: 1,
           },
           mutations: {

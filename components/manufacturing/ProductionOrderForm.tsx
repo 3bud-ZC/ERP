@@ -7,7 +7,7 @@ import { ClipboardList, Layers, AlertTriangle, Plus, Trash2, Sparkles } from 'lu
 import { useToast, Toast } from '@/components/ui/patterns';
 import { Field, SelectField, TextAreaField, Section, FieldGrid } from '@/components/ui/modal';
 import { EntityFormPage } from '@/components/forms/EntityFormPage';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 
 interface ProductLite {
   id:     string;
@@ -16,6 +16,7 @@ interface ProductLite {
   type?:  string | null;
   stock:  number;
   unit?:  string | null;
+  cost?:  number;
 }
 interface BOMItemEntry {
   id:         string;
@@ -36,12 +37,12 @@ export function ProductionOrderForm() {
 
   const productsQ = useQuery({
     queryKey: ['products', 'lite'],
-    queryFn:  () => apiGet<ProductLite[]>('/api/products'),
+    queryFn:  () => apiGetList<ProductLite>('/api/products'),
     staleTime: 60_000,
   });
   const linesQ = useQuery({
     queryKey: ['production-lines'],
-    queryFn:  () => apiGet<ProductionLineEntry[]>('/api/production-lines'),
+    queryFn:  () => apiGetList<ProductionLineEntry>('/api/production-lines'),
     staleTime: 60_000,
   });
   const products = useMemo(() => productsQ.data ?? [], [productsQ.data]);
@@ -64,6 +65,7 @@ export function ProductionOrderForm() {
   });
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState<string | null>(null);
+  const [marginPercent, setMarginPercent] = useState('25');
 
   /* Hybrid material editor:
    *   - On product select, the saved BOM (if any) auto-fills these rows.
@@ -78,7 +80,7 @@ export function ProductionOrderForm() {
   /* Pull saved BOM for the selected product (template). */
   const bomQ = useQuery({
     queryKey: ['bom', form.productId],
-    queryFn:  () => apiGet<BOMItemEntry[]>(`/api/bom?productId=${form.productId}`),
+    queryFn:  () => apiGetList<BOMItemEntry>(`/api/bom?productId=${form.productId}`),
     enabled:  !!form.productId,
   });
   const bom = useMemo(() => bomQ.data ?? [], [bomQ.data]);
@@ -138,6 +140,24 @@ export function ProductionOrderForm() {
   }, [rows, form.quantity, productMap]);
 
   const hasShortage = requirements.some(r => r.shortage > 0);
+
+  // NOTE: Product.cost is guaranteed to be synchronized with the canonical InventoryValuation/WAC engine
+  // via the syncProductCostFromValuation bridge in the backend. Thus, it accurately represents WAC.
+  const rawMaterialsMissingCost = requirements.filter(r => (productMap.get(r.materialId)?.cost || 0) <= 0 && r.required > 0);
+  const rawMaterialCost = requirements.reduce((sum, r) => sum + (r.required * (productMap.get(r.materialId)?.cost || 0)), 0);
+  const parsedLaborCost = parseFloat(form.laborCost) || 0;
+  const parsedOverheadCost = parseFloat(form.overheadCost) || 0;
+  const totalCost = rawMaterialCost + parsedLaborCost + parsedOverheadCost;
+  const outputQty = parseFloat(form.quantity) || 0;
+  const costPerUnit = outputQty > 0 ? totalCost / outputQty : 0;
+  const margin = Math.min(95, Math.max(0, parseFloat(marginPercent) || 0));
+  const suggestedSellingPrice = costPerUnit > 0 ? costPerUnit / (1 - margin / 100) : 0;
+  const expectedProfit = Math.max(0, suggestedSellingPrice - costPerUnit);
+
+  function fmtMoney(v?: number | null) {
+    if (v == null || isNaN(v)) return '0.00 ج.م';
+    return v.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ج.م';
+  }
 
   // BOM templates are still useful even though they're not required:
   //   - We surface a "reset from BOM template" action so the user can revert
@@ -332,7 +352,7 @@ export function ProductionOrderForm() {
                             <select
                               value={row.materialId}
                               onChange={e => updateRow(row.id, { materialId: e.target.value })}
-                              className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                             >
                               <option value="">— اختر المادة —</option>
                               {rawMaterials
@@ -354,7 +374,7 @@ export function ProductionOrderForm() {
                               value={row.quantity}
                               onChange={e => updateRow(row.id, { quantity: e.target.value })}
                               placeholder="0"
-                              className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm tabular-nums text-left focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm tabular-nums text-left focus:outline-none focus:ring-2 focus:ring-emerald-500"
                             />
                           </td>
                           <td className="px-3 py-2 text-slate-700 font-semibold text-left tabular-nums">
@@ -399,7 +419,7 @@ export function ProductionOrderForm() {
                 <button
                   type="button"
                   onClick={addRow}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg text-sm font-medium border border-blue-200 transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 rounded-lg text-sm font-medium border border-emerald-200 transition-colors"
                 >
                   <Plus className="w-4 h-4" /> إضافة مادة
                 </button>
@@ -421,6 +441,60 @@ export function ProductionOrderForm() {
                   بعض المواد ناقصة في المخزون — يمكنك حفظ الأمر كمعلّق وستحتاج لاستلام المواد قبل إكماله.
                 </div>
               )}
+            </Section>
+          )}
+
+          {form.productId && (
+            <Section title="ملخص التكلفة" action={<Sparkles className="w-4 h-4 text-slate-400" />}>
+              <dl className="space-y-2 text-sm">
+                <div className="flex justify-between text-slate-600">
+                  <dt>مواد خام</dt>
+                  <dd className="tabular-nums">{fmtMoney(rawMaterialCost)}</dd>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <dt>عمالة</dt>
+                  <dd className="tabular-nums">{fmtMoney(parsedLaborCost)}</dd>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <dt>تشغيل</dt>
+                  <dd className="tabular-nums">{fmtMoney(parsedOverheadCost)}</dd>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <dt>تكلفة الوحدة</dt>
+                  <dd className="tabular-nums">{fmtMoney(costPerUnit)}</dd>
+                </div>
+                <div className="border-t border-slate-200 pt-2 mt-2 flex justify-between font-bold text-slate-900">
+                  <dt>الإجمالي</dt>
+                  <dd className="tabular-nums">{fmtMoney(totalCost)}</dd>
+                </div>
+              </dl>
+              <div className="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3 space-y-2">
+                <label className="flex items-center justify-between gap-3 text-sm text-emerald-900">
+                  <span>هامش الربح المطلوب</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="95"
+                    step="0.5"
+                    value={marginPercent}
+                    onChange={e => setMarginPercent(e.target.value)}
+                    className="w-24 rounded-lg border border-emerald-200 bg-white px-2 py-1 text-center text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </label>
+                <div className="flex justify-between font-bold text-slate-900 text-sm">
+                  <dt>سعر البيع المقترح</dt>
+                  <dd className="tabular-nums">{fmtMoney(suggestedSellingPrice)}</dd>
+                </div>
+                <div className="flex justify-between text-slate-600 text-sm">
+                  <dt>ربح متوقع للوحدة</dt>
+                  <dd className="tabular-nums">{fmtMoney(expectedProfit)}</dd>
+                </div>
+                {rawMaterialsMissingCost.length > 0 && (
+                  <p className="text-xs text-amber-700 mt-2">
+                    لا توجد تكلفة كافية لهذه المادة الخام. أضف فاتورة شراء أو رصيد افتتاحي للمادة الخام أولاً.
+                  </p>
+                )}
+              </div>
             </Section>
           )}
         </form>

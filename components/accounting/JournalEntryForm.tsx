@@ -145,7 +145,7 @@ export function JournalEntryForm({
             subtitle="يجب أن يساوي مجموع المدين مجموع الدائن"
             action={
               <button type="button" onClick={addLine}
-                className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium border border-blue-200 rounded-lg px-2.5 py-1 hover:bg-blue-50">
+                className="flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-800 font-medium border border-emerald-200 rounded-lg px-2.5 py-1 hover:bg-emerald-50">
                 <Plus className="w-3.5 h-3.5" /> إضافة سطر
               </button>
             }
@@ -167,22 +167,22 @@ export function JournalEntryForm({
                       <td className="px-2 py-1.5">
                         <input value={line.accountCode}
                           onChange={e => updateLine(i, 'accountCode', e.target.value)}
-                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="1001" />
+                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="1001" />
                       </td>
                       <td className="px-2 py-1.5">
                         <input value={line.description}
                           onChange={e => updateLine(i, 'description', e.target.value)}
-                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="وصف" />
+                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="وصف" />
                       </td>
                       <td className="px-2 py-1.5">
                         <input type="number" min="0" value={line.debit}
                           onChange={e => updateLine(i, 'debit', e.target.value)}
-                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="0" />
+                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="0" />
                       </td>
                       <td className="px-2 py-1.5">
                         <input type="number" min="0" value={line.credit}
                           onChange={e => updateLine(i, 'credit', e.target.value)}
-                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="0" />
+                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="0" />
                       </td>
                       <td className="px-1 py-1.5 text-center">
                         <button type="button" onClick={() => removeLine(i)}

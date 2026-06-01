@@ -1,8 +1,7 @@
-import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
-import { getAuthenticatedUser } from '@/lib/auth';
-import { CODE_ENTITY_KEYS, resolveEntityCode } from '@/lib/code-sequence.service';
+import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
+import { CODE_ENTITY_KEYS, allocateEntityCode } from '@/lib/code-sequence.service';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -14,9 +13,10 @@ export async function GET(request: Request) {
     if (!user) {
       return apiError('لم يتم المصادقة', 401);
     }
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
     const materials = await prisma.product.findMany({
-      where: { type: 'raw_material' },
+      where: { tenantId: user.tenantId, type: 'raw_material', isActive: true },
       orderBy: { createdAt: 'desc' },
     });
     
@@ -33,9 +33,12 @@ export async function POST(request: Request) {
     if (!user) {
       return apiError('لم يتم المصادقة', 401);
     }
+    if (!checkPermission(user, 'create_product')) {
+      return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
+    }
 
     const body = await request.json();
-    const { code, nameAr, nameEn, unit, cost, stock, minStock, category, description } = body;
+    const { code: _ignoredCode, nameAr, nameEn, unit, cost, stock, minStock, category, description } = body;
 
     if (!nameAr || !unit) {
       return apiError('الاسم والوحدة مطلوبان', 400);
@@ -45,11 +48,18 @@ export async function POST(request: Request) {
       return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
-    const resolvedCode = await resolveEntityCode(
-      code,
-      CODE_ENTITY_KEYS.RAW_MATERIAL,
-      user.tenantId,
-    );
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: user.tenantId },
+      include: { _count: { select: { products: true } } },
+    });
+    if (!tenant || tenant.status !== 'active') {
+      return apiError('حساب الشركة غير نشط', 403);
+    }
+    if (tenant._count.products >= tenant.maxProducts) {
+      return apiError(`تم الوصول للحد الأقصى للمنتجات في خطة العميل (${tenant.maxProducts})`, 409);
+    }
+
+    const resolvedCode = await allocateEntityCode(CODE_ENTITY_KEYS.RAW_MATERIAL, user.tenantId);
 
     // @ts-ignore - Prisma type mismatch - tenant relation not in generated types
     const material = await prisma.product.create({
@@ -80,32 +90,27 @@ export async function PUT(request: Request) {
     if (!user) {
       return apiError('لم يتم المصادقة', 401);
     }
+    if (!checkPermission(user, 'update_product')) {
+      return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
+    }
 
     const body = await request.json();
-    const { id, code, nameAr, nameEn, unit, cost, stock, minStock, category, description } = body;
+    const { id, code: _ignoredCode, nameAr, nameEn, unit, cost, stock, minStock, category, description } = body;
 
     if (!id) {
       return apiError('معرف المادة الخام مطلوب', 400);
     }
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
-    // Check if code is being changed and if new code already exists
-    if (code) {
-      const existing = await prisma.product.findFirst({
-        where: {
-          code,
-          NOT: { id },
-        },
-      });
-
-      if (existing) {
-        return apiError('الكود موجود بالفعل', 400);
-      }
-    }
+    const existing = await prisma.product.findFirst({
+      where: { id, tenantId: user.tenantId, type: 'raw_material' },
+      select: { id: true },
+    });
+    if (!existing) return apiError('المادة الخام غير موجودة', 404);
 
     const material = await prisma.product.update({
       where: { id },
       data: {
-        ...(code && { code }),
         ...(nameAr && { nameAr }),
         ...(nameEn !== undefined && { nameEn: nameEn || null }),
         ...(unit && { unit }),
@@ -128,6 +133,9 @@ export async function DELETE(request: Request) {
     if (!user) {
       return apiError('لم يتم المصادقة', 401);
     }
+    if (!checkPermission(user, 'delete_product')) {
+      return apiError('ليس لديك صلاحية للقيام بهذا الإجراء', 403);
+    }
 
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -135,21 +143,29 @@ export async function DELETE(request: Request) {
     if (!id) {
       return apiError('معرف المادة الخام مطلوب', 400);
     }
+    if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
+
+    const existing = await prisma.product.findFirst({
+      where: { id, tenantId: user.tenantId, type: 'raw_material' },
+      select: { id: true },
+    });
+    if (!existing) return apiError('المادة الخام غير موجودة', 404);
 
     // Check if material is used in any BOM
     const bomCount = await prisma.bOMItem.count({
-      where: { materialId: id },
+      where: { materialId: id, product: { tenantId: user.tenantId } },
     });
 
     if (bomCount > 0) {
       return apiError('لا يمكن حذف المادة الخام لأنها مستخدمة في قوائم المواد', 400);
     }
 
-    await prisma.product.delete({
+    await prisma.product.update({
       where: { id },
+      data: { isActive: false },
     });
 
-    return apiSuccess(null, 'تم حذف المادة الخام بنجاح');
+    return apiSuccess({ id, mode: 'soft' }, 'تم إلغاء تفعيل المادة الخام بنجاح');
   } catch (error) {
     return handleApiError(error, 'Delete raw material');
   }

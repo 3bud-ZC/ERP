@@ -80,7 +80,7 @@ export function getInvoiceConfig(kind: InvoiceKind): InvoiceConfig {
 export const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
   paid:      { label: 'مدفوعة',  cls: 'bg-green-50 text-green-700 border-green-200' },
   pending:   { label: 'معلقة',   cls: 'bg-yellow-50 text-yellow-700 border-yellow-200' },
-  completed: { label: 'مكتملة',  cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+  completed: { label: 'مكتملة',  cls: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
   cancelled: { label: 'ملغاة',   cls: 'bg-red-50 text-red-600 border-red-200' },
   draft:     { label: 'مسودة',   cls: 'bg-slate-100 text-slate-600 border-slate-200' },
 };
@@ -88,7 +88,7 @@ export const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
 export const PAYMENT_LABELS: Record<string, { label: string; cls: string }> = {
   cash:          { label: 'نقدي',       cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   credit:        { label: 'آجل',        cls: 'bg-orange-50 text-orange-700 border-orange-200' },
-  partial:       { label: 'جزئي',       cls: 'bg-purple-50 text-purple-700 border-purple-200' },
+  partial:       { label: 'جزئي',       cls: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
   bank_transfer: { label: 'تحويل بنكي', cls: 'bg-sky-50 text-sky-700 border-sky-200' },
 };
 

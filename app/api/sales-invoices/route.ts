@@ -5,9 +5,7 @@ import { salesInvoiceRepo } from '@/lib/repositories/sales-invoice.repo';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 import { validateStockAvailability } from '@/lib/inventory';
-import { createSalesInvoiceEntry, postJournalEntry, reverseJournalEntry } from '@/lib/accounting';
 import { dualRunCompare, dualRunCompareById } from '@/lib/domain/accounting/dual-run';
-import { createInventoryTransaction } from '@/lib/inventory-transactions';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { logActivity } from '@/lib/activity-log';
@@ -15,7 +13,7 @@ import {
   executeCreateSalesInvoice,
   executeUpdateSalesInvoice,
   executeCancelSalesInvoice,
-  executeDeleteSalesInvoice,
+  executeDeleteInvoice,
   InvoiceExecutionError,
   mapExecutionError,
 } from '@/lib/services/invoice-execution.service';
@@ -56,6 +54,15 @@ function translateSalesError(error: any): string {
   if (msg.includes('INVENTORY_FAILED')) return 'فشل تحديث المخزون';
   if (msg.includes('ACCOUNTING_FAILED')) return 'فشل إنشاء القيود المحاسبية';
   if (msg.includes('VALIDATION_FAILED')) return 'بيانات الفاتورة غير صحيحة';
+  if (msg.includes('must have at least one item')) return 'يجب إضافة صنف واحد على الأقل';
+  if (msg.includes('amount must equal payment amount')) return 'إجمالي توزيعات الدفع لا يساوي مبلغ الدفع';
+  if (msg.includes('must be linked to at least one invoice')) return 'يجب ربط الدفعة بفاتورة واحدة على الأقل';
+  if (msg.includes('paid amount cannot exceed') || msg.includes('cannot exceed')) return 'المبلغ المدفوع لا يمكن أن يتجاوز إجمالي الفاتورة';
+  if (msg.includes('must choose cashbox') || msg.includes('cashbox')) return 'يجب اختيار الخزنة عند تسجيل مبلغ مدفوع';
+  if (msg.includes('customer') && msg.includes('not found')) return 'العميل غير موجود أو لا يتبع هذا الحساب';
+  if (msg.includes('product') && msg.includes('not found')) return 'يوجد صنف غير موجود أو غير تابع للحساب';
+  if (msg.includes('Account') || msg.includes('account code')) return 'دليل الحسابات غير مكتمل لهذا الحساب الجديد. أعد إنشاء الحساب أو تواصل مع الإدارة.';
+  if (msg.includes('posting') || msg.includes('journal')) return 'تعذر ترحيل القيد المحاسبي. تحقق من إعدادات الحسابات.';
   if (msg.includes('Foreign key') || msg.includes('foreign key') || msg.includes('P2003')) return 'هذا العنصر مرتبط ببيانات أخرى';
   if (msg.includes('Unique constraint') || msg.includes('P2002')) return 'رقم الفاتورة مستخدم بالفعل';
   if (msg.includes('Stock') || msg.includes('stock') || msg.includes('insufficient')) return 'رصيد المخزون غير كافٍ';
@@ -130,6 +137,10 @@ export async function POST(request: Request) {
 
     const { items, ...invoiceData } = body;
     const { tenantId: _clientTenantId, ...safeInvoiceData } = invoiceData;
+    const initialPaidAmount = Number(safeInvoiceData.paidAmount || 0);
+    const cashboxId = safeInvoiceData.cashboxId ? String(safeInvoiceData.cashboxId) : '';
+    const paymentStatus = String(safeInvoiceData.paymentStatus || '').trim().toLowerCase();
+    const requiresCashbox = initialPaidAmount > 0 || paymentStatus === 'cash' || paymentStatus === 'paid';
     // Normalize all DateTime fields (date, issueDate, dueDate) — see helper.
     normalizeInvoiceDates(safeInvoiceData);
 
@@ -174,6 +185,10 @@ export async function POST(request: Request) {
     }
 
     console.log(`${requestId} ✓ All inputs valid`);
+    if (initialPaidAmount < 0) return apiError('المبلغ المدفوع لا يمكن أن يكون أقل من صفر', 400);
+    if (requiresCashbox && !cashboxId) {
+      return apiError('يجب اختيار الخزنة عند تسجيل مبلغ مدفوع', 400);
+    }
 
     // ========================================================================
     // STEP 5: Verify Customer Exists in Tenant
@@ -202,12 +217,12 @@ export async function POST(request: Request) {
     console.log(`${requestId} → Checking stock availability...`);
     let validation;
     try {
-      validation = await validateStockAvailability(items);
+      validation = await validateStockAvailability(items, user.tenantId);
       if (!validation.valid) {
         console.log(`${requestId} ✗ Stock check failed`, validation.errors);
         return apiError(
           'رصيد المخزون غير كافٍ لأحد المنتجات أو أكثر',
-          400,
+          409,
           { details: validation.errors }
         );
       }
@@ -240,6 +255,7 @@ export async function POST(request: Request) {
           status: safeInvoiceData.status,
           paymentStatus: safeInvoiceData.paymentStatus,
           paidAmount: safeInvoiceData.paidAmount,
+          cashboxId,
           paymentTermsDays: safeInvoiceData.paymentTermsDays,
           issueDate: safeInvoiceData.issueDate ? new Date(safeInvoiceData.issueDate) : undefined,
           salesRepId: safeInvoiceData.salesRepId,
@@ -260,10 +276,12 @@ export async function POST(request: Request) {
           discountPercent?: number;
           taxRate?: number;
           description?: string;
+          warehouseId?: string | null;
         }) => ({
           productId: item.productId,
           quantity: Number(item.quantity),
           price: Number(item.price),
+          warehouseId: item.warehouseId,
           discountPercent: item.discountPercent,
           taxRate: item.taxRate,
           description: item.description,
@@ -385,7 +403,7 @@ export async function PUT(request: Request) {
       return apiError('يجب أن تحتوي الفاتورة على صنف واحد على الأقل', 400);
     }
 
-    const validation = await validateStockAvailability(items);
+    const validation = await validateStockAvailability(items, user.tenantId);
     if (!validation.valid) {
       return apiError('رصيد المخزون غير كافٍ', 409, { details: validation.errors });
     }
@@ -456,10 +474,11 @@ export async function DELETE(request: Request) {
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
 
     try {
-      const result = await executeDeleteSalesInvoice({
+      const result = await executeDeleteInvoice({
         invoiceId: id,
         tenantId: user.tenantId,
         userId: user.id,
+        invoiceType: 'sales',
       });
 
       await logAuditAction(

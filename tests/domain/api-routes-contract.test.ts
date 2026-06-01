@@ -81,13 +81,17 @@ describe('API routes contract — static scan', () => {
         // something — empty/disabled stubs are fine)
         const hasReturn = /\breturn\b/.test(src);
         if (hasReturn) {
-          const importsHelper =
+          const importsApiResponseHelper =
             /from\s+['"]@\/lib\/api-response['"]/.test(src) &&
             /\b(apiSuccess|apiError|handleApiError|apiOnboardingRequired)\b/.test(src);
+          const importsAdminHelper =
+            /from\s+['"]@\/lib\/admin\/api['"]/.test(src) &&
+            /\b(adminSuccess|adminError)\b/.test(src);
+          const importsHelper = importsApiResponseHelper || importsAdminHelper;
 
           expect(
             importsHelper,
-            `${relPath} returns from a handler but does not import any of apiSuccess/apiError/handleApiError/apiOnboardingRequired from @/lib/api-response.`
+            `${relPath} returns from a handler but does not import canonical envelope helpers (apiSuccess/apiError...) or admin helpers (adminSuccess/adminError).`
           ).toBe(true);
         }
       });

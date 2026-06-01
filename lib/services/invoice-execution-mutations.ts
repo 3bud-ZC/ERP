@@ -4,11 +4,11 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import {
-  InvoiceExecutionError,
-  type ExecutionInvoiceItem,
-  type SalesInvoiceExecutionInput,
-  type PurchaseInvoiceExecutionInput,
+import { InvoiceExecutionError } from '@/lib/services/execution-errors';
+import type {
+  ExecutionInvoiceItem,
+  SalesInvoiceExecutionInput,
+  PurchaseInvoiceExecutionInput,
 } from '@/lib/services/invoice-execution.service';
 import {
   computeInvoiceTotals,
@@ -35,49 +35,95 @@ import {
   applyPurchaseInflow,
   applySalesReturnInflow,
   reverseInvoiceStockMovements,
+  purgeInvoiceInventoryArtifacts,
 } from '@/lib/services/inventory-movement.service';
 import { reverseJournalEntriesInTx } from '@/lib/services/journal-reversal.service';
 import { reversePaymentInTx } from '@/lib/services/payment-execution.service';
 
-async function reverseInvoicePaymentsInTx(
+function isDraft(status?: string) {
+  return status === 'draft';
+}
+
+async function reverseLinkedSalesReturnsInTx(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  invoiceId: string,
+): Promise<void> {
+  const approved = await tx.salesReturn.findMany({
+    where: { salesInvoiceId: invoiceId, tenantId, status: 'approved' },
+    select: { id: true },
+  });
+
+  for (const ret of approved) {
+    await reverseJournalEntriesInTx(tx, tenantId, 'SalesReturn', ret.id);
+    await reverseInvoiceStockMovements(tx, tenantId, ret.id, ['SalesReturn']);
+    await purgeInvoiceInventoryArtifacts(tx, tenantId, ret.id, ['SalesReturn']);
+    await tx.salesReturnItem.deleteMany({ where: { salesReturnId: ret.id } });
+    await tx.salesReturn.delete({ where: { id: ret.id } });
+  }
+
+  await tx.salesReturn.updateMany({
+    where: { salesInvoiceId: invoiceId, tenantId, status: { not: 'approved' } },
+    data: { salesInvoiceId: null },
+  });
+}
+
+async function reverseLinkedPurchaseReturnsInTx(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  invoiceId: string,
+): Promise<void> {
+  const approved = await tx.purchaseReturn.findMany({
+    where: { purchaseInvoiceId: invoiceId, tenantId, status: 'approved' },
+    select: { id: true },
+  });
+
+  for (const ret of approved) {
+    await reverseJournalEntriesInTx(tx, tenantId, 'PurchaseReturn', ret.id);
+    await reverseInvoiceStockMovements(tx, tenantId, ret.id, ['PurchaseReturn']);
+    await purgeInvoiceInventoryArtifacts(tx, tenantId, ret.id, ['PurchaseReturn']);
+    await tx.purchaseReturnItem.deleteMany({ where: { purchaseReturnId: ret.id } });
+    await tx.purchaseReturn.delete({ where: { id: ret.id } });
+  }
+
+  await tx.purchaseReturn.updateMany({
+    where: { purchaseInvoiceId: invoiceId, tenantId, status: { not: 'approved' } },
+    data: { purchaseInvoiceId: null },
+  });
+}
+
+async function reversePaymentsForInvoiceInTx(
   tx: Prisma.TransactionClient,
   tenantId: string,
   invoiceId: string,
   invoiceType: 'sales' | 'purchase',
 ): Promise<void> {
   const paymentIds = new Set<string>();
-  const paymentField = invoiceType === 'sales' ? 'salesInvoiceId' : 'purchaseInvoiceId';
 
-  const directPayments = await tx.payment.findMany({
-    where: { [paymentField]: invoiceId, tenantId } as any,
-    select: { id: true },
-  });
-  directPayments.forEach(p => paymentIds.add(p.id));
+  if (invoiceType === 'sales') {
+    const direct = await tx.payment.findMany({
+      where: { salesInvoiceId: invoiceId, tenantId },
+      select: { id: true },
+    });
+    direct.forEach(p => paymentIds.add(p.id));
+  } else {
+    const direct = await tx.payment.findMany({
+      where: { purchaseInvoiceId: invoiceId, tenantId },
+      select: { id: true },
+    });
+    direct.forEach(p => paymentIds.add(p.id));
+  }
 
   const allocRows = await tx.paymentAllocation.findMany({
-    where: {
-      invoiceId,
-      invoiceType: invoiceType === 'sales' ? 'sales' : 'purchase',
-      tenantId,
-    },
+    where: { invoiceId, invoiceType, tenantId },
     select: { paymentId: true },
   });
   allocRows.forEach(a => paymentIds.add(a.paymentId));
 
   for (const paymentId of Array.from(paymentIds)) {
     await reversePaymentInTx(tx, tenantId, paymentId);
-    await tx.payment.update({
-      where: { id: paymentId },
-      data:
-        invoiceType === 'sales'
-          ? { salesInvoiceId: null }
-          : { purchaseInvoiceId: null },
-    });
+    await tx.payment.delete({ where: { id: paymentId } });
   }
-}
-
-function isDraft(status?: string) {
-  return status === 'draft';
 }
 
 function totalsOpts(
@@ -288,32 +334,22 @@ export async function executeDeleteSalesInvoice(params: {
 
   return prisma.$transaction(
     async tx => {
-      const paymentIds = new Set<string>();
-
-      const directPayments = await tx.payment.findMany({
-        where: { salesInvoiceId: params.invoiceId, tenantId: params.tenantId },
-        select: { id: true },
-      });
-      directPayments.forEach(p => paymentIds.add(p.id));
-
-      const allocRows = await tx.paymentAllocation.findMany({
-        where: { invoiceId: params.invoiceId, invoiceType: 'sales', tenantId: params.tenantId },
-        select: { paymentId: true },
-      });
-      allocRows.forEach(a => paymentIds.add(a.paymentId));
-
-      for (const paymentId of Array.from(paymentIds)) {
-        await reversePaymentInTx(tx, params.tenantId, paymentId);
-        await tx.payment.delete({ where: { id: paymentId } });
-      }
-
-      await tx.salesReturn.updateMany({
-        where: { salesInvoiceId: params.invoiceId, tenantId: params.tenantId },
-        data: { salesInvoiceId: null },
-      });
+      await reverseLinkedSalesReturnsInTx(tx, params.tenantId, params.invoiceId);
+      await reversePaymentsForInvoiceInTx(
+        tx,
+        params.tenantId,
+        params.invoiceId,
+        'sales',
+      );
 
       await reverseJournalEntriesInTx(tx, params.tenantId, 'SalesInvoice', params.invoiceId);
       await reverseInvoiceStockMovements(tx, params.tenantId, params.invoiceId, ['SalesInvoice']);
+      await purgeInvoiceInventoryArtifacts(
+        tx,
+        params.tenantId,
+        params.invoiceId,
+        ['SalesInvoice'],
+      );
 
       await tx.salesInvoiceItem.deleteMany({ where: { salesInvoiceId: params.invoiceId } });
       await tx.salesInvoice.delete({ where: { id: params.invoiceId } });
@@ -339,32 +375,22 @@ export async function executeDeletePurchaseInvoice(params: {
 
   return prisma.$transaction(
     async tx => {
-      const paymentIds = new Set<string>();
-
-      const directPayments = await tx.payment.findMany({
-        where: { purchaseInvoiceId: params.invoiceId, tenantId: params.tenantId },
-        select: { id: true },
-      });
-      directPayments.forEach(p => paymentIds.add(p.id));
-
-      const allocRows = await tx.paymentAllocation.findMany({
-        where: { invoiceId: params.invoiceId, invoiceType: 'purchase', tenantId: params.tenantId },
-        select: { paymentId: true },
-      });
-      allocRows.forEach(a => paymentIds.add(a.paymentId));
-
-      for (const paymentId of Array.from(paymentIds)) {
-        await reversePaymentInTx(tx, params.tenantId, paymentId);
-        await tx.payment.delete({ where: { id: paymentId } });
-      }
-
-      await tx.purchaseReturn.updateMany({
-        where: { purchaseInvoiceId: params.invoiceId, tenantId: params.tenantId },
-        data: { purchaseInvoiceId: null },
-      });
+      await reverseLinkedPurchaseReturnsInTx(tx, params.tenantId, params.invoiceId);
+      await reversePaymentsForInvoiceInTx(
+        tx,
+        params.tenantId,
+        params.invoiceId,
+        'purchase',
+      );
 
       await reverseJournalEntriesInTx(tx, params.tenantId, 'PurchaseInvoice', params.invoiceId);
       await reverseInvoiceStockMovements(tx, params.tenantId, params.invoiceId, ['PurchaseInvoice']);
+      await purgeInvoiceInventoryArtifacts(
+        tx,
+        params.tenantId,
+        params.invoiceId,
+        ['PurchaseInvoice'],
+      );
 
       await tx.purchaseInvoiceItem.deleteMany({ where: { purchaseInvoiceId: params.invoiceId } });
       await tx.purchaseInvoice.delete({ where: { id: params.invoiceId } });
@@ -373,6 +399,26 @@ export async function executeDeletePurchaseInvoice(params: {
     },
     { isolationLevel: 'Serializable', maxWait: 15000, timeout: 60000 },
   );
+}
+
+export async function executeDeleteInvoice(params: {
+  invoiceId: string;
+  tenantId: string;
+  userId: string;
+  invoiceType: 'sales' | 'purchase';
+}) {
+  if (params.invoiceType === 'sales') {
+    return executeDeleteSalesInvoice({
+      invoiceId: params.invoiceId,
+      tenantId: params.tenantId,
+      userId: params.userId,
+    });
+  }
+  return executeDeletePurchaseInvoice({
+    invoiceId: params.invoiceId,
+    tenantId: params.tenantId,
+    userId: params.userId,
+  });
 }
 
 export async function executeCancelSalesInvoice(params: {
@@ -388,13 +434,12 @@ export async function executeCancelSalesInvoice(params: {
   }
 
   return prisma.$transaction(async tx => {
-    await reverseInvoicePaymentsInTx(tx, params.tenantId, params.invoiceId, 'sales');
     await reverseJournalEntriesInTx(tx, params.tenantId, 'SalesInvoice', params.invoiceId);
     await reverseInvoiceStockMovements(tx, params.tenantId, params.invoiceId, ['SalesInvoice']);
 
     const invoice = await tx.salesInvoice.update({
       where: { id: params.invoiceId },
-      data: { status: 'cancelled', paymentStatus: 'cancelled', paidAmount: 0 },
+      data: { status: 'cancelled' },
     });
 
     return { invoice };
@@ -560,13 +605,12 @@ export async function executeCancelPurchaseInvoice(params: {
   }
 
   return prisma.$transaction(async tx => {
-    await reverseInvoicePaymentsInTx(tx, params.tenantId, params.invoiceId, 'purchase');
     await reverseJournalEntriesInTx(tx, params.tenantId, 'PurchaseInvoice', params.invoiceId);
     await reverseInvoiceStockMovements(tx, params.tenantId, params.invoiceId, ['PurchaseInvoice']);
 
     const invoice = await tx.purchaseInvoice.update({
       where: { id: params.invoiceId },
-      data: { status: 'cancelled', paymentStatus: 'cancelled', paidAmount: 0 },
+      data: { status: 'cancelled' },
     });
     return { invoice };
   });

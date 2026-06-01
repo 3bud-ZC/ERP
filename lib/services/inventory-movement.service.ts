@@ -7,10 +7,12 @@ import {
   recordStockInflowWithTx,
   recordStockOutflowWithTx,
   getUnitCostInTx,
+  reverseCostRecordsByReference,
 } from '@/lib/inventory-costing-bridge';
-import { InvoiceExecutionError } from '@/lib/services/invoice-execution.service';
+import { InvoiceExecutionError } from '@/lib/services/execution-errors';
 import {
   getAvailableStockInTx,
+  ensureWarehouseStockSeededFromProductInTx,
   upsertWarehouseStockDelta,
 } from '@/lib/services/warehouse-stock.service';
 
@@ -18,6 +20,7 @@ export interface StockLine {
   productId: string;
   quantity: number;
   unitCost?: number;
+  warehouseId?: string | null;
 }
 
 async function resolveWarehouseId(
@@ -43,6 +46,9 @@ async function changeProductStock(
 ): Promise<void> {
   const wh = await resolveWarehouseId(tx, tenantId, productId, warehouseId);
   if (wh) {
+    // Auto-seed missing warehouse stock rows from product.stock for legacy data.
+    await ensureWarehouseStockSeededFromProductInTx(tx, tenantId, productId, wh);
+
     if (delta < 0) {
       const avail = await getAvailableStockInTx(tx, tenantId, productId, wh);
       if (avail < Math.abs(delta)) {
@@ -108,7 +114,8 @@ export async function applySalesOutflow(
   referenceType: string,
   referenceId: string,
 ): Promise<number> {
-  await changeProductStock(tx, tenantId, line.productId, -line.quantity);
+  const warehouseId = await resolveWarehouseId(tx, tenantId, line.productId, line.warehouseId);
+  await changeProductStock(tx, tenantId, line.productId, -line.quantity, warehouseId);
 
   const cogs = await recordStockOutflowWithTx(
     tx,
@@ -128,6 +135,7 @@ export async function applySalesOutflow(
       referenceType,
       unitCost: line.quantity > 0 ? cogs / line.quantity : 0,
       totalCost: cogs,
+      warehouseId: warehouseId ?? undefined,
       tenantId,
       date: new Date(),
     },
@@ -144,7 +152,8 @@ export async function applyPurchaseInflow(
   referenceType: string,
   referenceId: string,
 ): Promise<void> {
-  await changeProductStock(tx, tenantId, line.productId, line.quantity);
+  const warehouseId = await resolveWarehouseId(tx, tenantId, line.productId, line.warehouseId);
+  await changeProductStock(tx, tenantId, line.productId, line.quantity, warehouseId);
 
   const unitCost = line.unitCost ?? 0;
   await recordStockInflowWithTx(
@@ -157,7 +166,6 @@ export async function applyPurchaseInflow(
     referenceId,
   );
 
-  const warehouseId = await resolveWarehouseId(tx, tenantId, line.productId);
   await tx.inventoryTransaction.create({
     data: {
       productId: line.productId,
@@ -167,6 +175,7 @@ export async function applyPurchaseInflow(
       referenceType,
       unitCost,
       totalCost: line.quantity * unitCost,
+      warehouseId: warehouseId ?? undefined,
       tenantId,
       date: new Date(),
     },
@@ -180,7 +189,8 @@ export async function applySalesReturnInflow(
   line: StockLine,
   returnId: string,
 ): Promise<number> {
-  await changeProductStock(tx, tenantId, line.productId, line.quantity);
+  const warehouseId = await resolveWarehouseId(tx, tenantId, line.productId, line.warehouseId);
+  await changeProductStock(tx, tenantId, line.productId, line.quantity, warehouseId);
 
   const unitCost = line.unitCost ?? 0;
   if (unitCost > 0) {
@@ -195,7 +205,6 @@ export async function applySalesReturnInflow(
     );
   }
 
-  const warehouseId = await resolveWarehouseId(tx, tenantId, line.productId);
   await tx.inventoryTransaction.create({
     data: {
       productId: line.productId,
@@ -205,6 +214,7 @@ export async function applySalesReturnInflow(
       referenceType: 'SalesReturn',
       unitCost: unitCost,
       totalCost: unitCost * line.quantity,
+      warehouseId: warehouseId ?? undefined,
       tenantId,
       date: new Date(),
     },
@@ -242,11 +252,13 @@ export async function reverseInvoiceStockMovements(
         productId: m.productId,
         quantity: qty,
         unitCost: m.unitCost ?? 0,
+        warehouseId: m.warehouseId,
       }, `${m.referenceType}:reversal`, referenceId);
     } else {
       await applySalesOutflow(tx, tenantId, {
         productId: m.productId,
         quantity: qty,
+        warehouseId: m.warehouseId,
       }, `${m.referenceType}:reversal`, referenceId);
     }
   }
@@ -254,6 +266,26 @@ export async function reverseInvoiceStockMovements(
   if (movementIds.length > 0) {
     await tx.inventoryTransaction.deleteMany({ where: { id: { in: movementIds } } });
   }
+
+  await reverseCostRecordsByReference(tx, tenantId, referenceTypes, referenceId);
+}
+
+/** Remove all inventory audit + costing rows for a document (after reversals). */
+export async function purgeInvoiceInventoryArtifacts(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  referenceId: string,
+  referenceTypes: string[],
+): Promise<void> {
+  const allTypes = [
+    ...referenceTypes,
+    ...referenceTypes.map(t => `${t}:reversal`),
+  ];
+
+  await tx.inventoryTransaction.deleteMany({
+    where: { tenantId, referenceId, referenceType: { in: allTypes } },
+  });
+  await reverseCostRecordsByReference(tx, tenantId, allTypes, referenceId);
 }
 
 /** Raw material consumption for production (FIFO/WAC outflow). */
@@ -263,7 +295,8 @@ export async function applyProductionMaterialOutflow(
   line: StockLine,
   productionOrderId: string,
 ): Promise<number> {
-  await changeProductStock(tx, tenantId, line.productId, -line.quantity);
+  const warehouseId = await resolveWarehouseId(tx, tenantId, line.productId, line.warehouseId);
+  await changeProductStock(tx, tenantId, line.productId, -line.quantity, warehouseId);
 
   const cogs = await recordStockOutflowWithTx(
     tx,
@@ -283,6 +316,7 @@ export async function applyProductionMaterialOutflow(
       referenceType: 'ProductionOrder',
       unitCost: line.quantity > 0 ? cogs / line.quantity : 0,
       totalCost: cogs,
+      warehouseId: warehouseId ?? undefined,
       tenantId,
       date: new Date(),
     },
@@ -381,7 +415,8 @@ export async function applyProductionFinishedInflow(
   productionOrderId: string,
 ): Promise<void> {
   const unitCost = line.unitCost ?? 0;
-  await changeProductStock(tx, tenantId, line.productId, line.quantity);
+  const warehouseId = await resolveWarehouseId(tx, tenantId, line.productId, line.warehouseId);
+  await changeProductStock(tx, tenantId, line.productId, line.quantity, warehouseId);
 
   await recordStockInflowWithTx(
     tx,
@@ -393,7 +428,6 @@ export async function applyProductionFinishedInflow(
     productionOrderId,
   );
 
-  const warehouseId = await resolveWarehouseId(tx, tenantId, line.productId);
   await tx.inventoryTransaction.create({
     data: {
       productId: line.productId,

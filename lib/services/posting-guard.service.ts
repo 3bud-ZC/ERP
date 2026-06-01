@@ -4,7 +4,7 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { InvoiceExecutionError } from '@/lib/services/invoice-execution.service';
+import { InvoiceExecutionError } from '@/lib/services/execution-errors';
 
 export type DocumentLifecycleStatus =
   | 'draft'
@@ -122,4 +122,49 @@ export async function assertReturnNotAlreadyApproved(
       'Return is already approved and posted',
     );
   }
+}
+
+/** Required before any canonical journal line post. */
+export async function assertJournalEntryCanPost(
+  tx: Prisma.TransactionClient,
+  params: {
+    tenantId: string;
+    referenceType: string;
+    referenceId: string;
+    correlationId?: string;
+  },
+): Promise<void> {
+  if (!params.tenantId?.trim()) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'tenantId is required');
+  }
+  if (!params.referenceType?.trim()) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'referenceType is required');
+  }
+  if (!params.referenceId?.trim()) {
+    throw new InvoiceExecutionError('VALIDATION_FAILED', 'referenceId is required');
+  }
+
+  if (params.correlationId) {
+    const dup = await tx.journalEntry.findFirst({
+      where: {
+        tenantId: params.tenantId,
+        correlationId: params.correlationId,
+        isPosted: true,
+      },
+      select: { id: true },
+    });
+    if (dup) {
+      throw new InvoiceExecutionError(
+        'VALIDATION_FAILED',
+        'Duplicate posting request (correlationId already used)',
+      );
+    }
+  }
+
+  await assertCanPostReference(
+    tx,
+    params.tenantId,
+    params.referenceType,
+    params.referenceId,
+  );
 }

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet } from '@/lib/api/fetcher';
+import { apiGet, apiGetList } from '@/lib/api/fetcher';
 import { queryKeys } from '@/lib/api/query-keys';
 import { Plus, Pencil, Trash2, CheckCircle, XCircle, Warehouse } from 'lucide-react';
 import Link from 'next/link';
@@ -25,7 +25,7 @@ export default function WarehousesPage() {
 
   const warehousesQ = useQuery({
     queryKey: queryKeys.warehouses,
-    queryFn: () => apiGet<WarehouseItem[]>('/api/warehouses'),
+    queryFn: () => apiGetList<WarehouseItem>('/api/warehouses'),
   });
   const warehouses = useMemo(() => warehousesQ.data ?? [], [warehousesQ.data]);
   const loading    = warehousesQ.isLoading;
@@ -59,7 +59,7 @@ export default function WarehousesPage() {
       subtitle={loading ? 'جاري التحميل…' : `${warehouses.length} مستودع`}
       toolbar={
         <Link href="/warehouses/new"
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all text-sm font-medium">
+          className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 text-white rounded-lg hover:bg-slate-900 active:scale-95 transition-all text-sm font-medium">
           <Plus className="w-4 h-4" /> إضافة مستودع
         </Link>
       }
@@ -96,7 +96,7 @@ export default function WarehousesPage() {
                     </span>
                   )}
                   <Link href={`/warehouses/${w.id}/edit`}
-                    className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="تعديل">
+                    className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors" title="تعديل">
                     <Pencil className="w-4 h-4" />
                   </Link>
                   <button onClick={() => { setDeleteId(w.id); setDeleteError(null); }}
