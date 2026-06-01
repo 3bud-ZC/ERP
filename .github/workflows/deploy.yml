@@ -93,6 +93,14 @@ jobs:
             RELEASE_TAG="$(date +%Y%m%d%H%M%S)"
             RELEASE_DIR="$APP_ROOT/releases/$RELEASE_TAG"
 
+            if ! swapon --show | grep -q "/swapfile"; then
+              fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+              chmod 600 /swapfile
+              mkswap /swapfile
+              swapon /swapfile
+              grep -q "^/swapfile " /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+            fi
+
             mkdir -p "$RELEASE_DIR"
             tar -xzf /tmp/abud-platform.tgz -C "$RELEASE_DIR"
             cp -f "$APP_ROOT/current/.env" "$RELEASE_DIR/.env"
@@ -110,7 +118,12 @@ jobs:
             PORT=3100 pm2 start npm --name "$PM2_APP" -- start
             pm2 save
 
-            curl -fsS http://127.0.0.1:3100/api/health
+            for i in 1 2 3 4 5 6 7 8; do
+              if curl -fsS http://127.0.0.1:3100/api/health; then
+                break
+              fi
+              sleep 3
+            done
           '
 
       - name: Post-deploy smoke test
