@@ -115,6 +115,9 @@ jobs:
             cp -f "$APP_ROOT/shared/.env" "$RELEASE_DIR/.env"
 
             cd "$RELEASE_DIR"
+            set -a
+            . ./.env
+            set +a
             npm install
             npx prisma generate
             npx prisma migrate deploy
@@ -124,7 +127,10 @@ jobs:
 
             pm2 delete "$PM2_APP" || true
             cd "$APP_ROOT/current"
-            PORT=3100 pm2 start npm --name "$PM2_APP" -- start
+            set -a
+            . ./.env
+            set +a
+            pm2 start npm --name "$PM2_APP" -- start
             pm2 save
 
             for i in 1 2 3 4 5 6 7 8; do
@@ -137,7 +143,15 @@ jobs:
 
       - name: Post-deploy smoke test
         run: |
-          ssh $SSH_OPTS "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" "curl -fsS https://erp.abud.fun/api/health"
+          ssh $SSH_OPTS "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" '
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if curl -fsS https://erp.abud.fun/api/health; then
+                exit 0
+              fi
+              sleep 3
+            done
+            exit 1
+          '
 
       - name: Deployment summary
         run: |
