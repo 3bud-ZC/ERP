@@ -103,7 +103,16 @@ jobs:
 
             mkdir -p "$RELEASE_DIR"
             tar -xzf /tmp/abud-platform.tgz -C "$RELEASE_DIR"
-            cp -f "$APP_ROOT/current/.env" "$RELEASE_DIR/.env"
+            mkdir -p "$APP_ROOT/shared"
+            if [ ! -f "$APP_ROOT/shared/.env" ]; then
+              if [ -f "$APP_ROOT/current/.env" ]; then
+                cp -f "$APP_ROOT/current/.env" "$APP_ROOT/shared/.env"
+              else
+                echo "Missing env file: $APP_ROOT/shared/.env"
+                exit 1
+              fi
+            fi
+            cp -f "$APP_ROOT/shared/.env" "$RELEASE_DIR/.env"
 
             cd "$RELEASE_DIR"
             npm install
