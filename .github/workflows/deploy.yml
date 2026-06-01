@@ -76,13 +76,17 @@ jobs:
         run: |
           ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
 
+      - name: Set SSH options
+        run: |
+          echo 'SSH_OPTS=-o ServerAliveInterval=30 -o ServerAliveCountMax=120 -o TCPKeepAlive=yes -o ConnectTimeout=20' >> $GITHUB_ENV
+
       - name: Upload release
         run: |
-          scp /tmp/abud-platform.tgz "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/abud-platform.tgz"
+          scp $SSH_OPTS /tmp/abud-platform.tgz "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/abud-platform.tgz"
 
       - name: Run remote deployment
         run: |
-          ssh "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" '
+          ssh $SSH_OPTS "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" '
             set -euo pipefail
             APP_ROOT="${{ secrets.VPS_APP_ROOT }}"
             PM2_APP="${{ secrets.VPS_PM2_APP }}"
@@ -111,7 +115,7 @@ jobs:
 
       - name: Post-deploy smoke test
         run: |
-          ssh "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" "curl -fsS https://erp.abud.fun/api/health"
+          ssh $SSH_OPTS "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" "curl -fsS https://erp.abud.fun/api/health"
 
       - name: Deployment summary
         run: |
