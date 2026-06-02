@@ -2,7 +2,7 @@
 # Sync local project to VPS (tarball, preserves server .env). Run from repo root.
 set -euo pipefail
 
-VPS_HOST="${VPS_HOST:-root@159.223.167.220}"
+VPS_HOST="${VPS_HOST:-root@167.99.157.6}"
 ERP_DIR="${ERP_DIR:-/var/www/erp}"
 ARCHIVE="/tmp/erp-sync-$(date +%Y%m%d%H%M).tar.gz"
 

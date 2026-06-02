@@ -4,9 +4,9 @@ set -euo pipefail
 # auto_certbot.sh
 # Polls DNS for two hostnames and runs certbot --nginx when both resolve to the expected IP.
 
-DOMAINS=("og-estore.site" "www.og-estore.site")
-TARGET_IP="159.223.167.220"
-EMAIL="admin@og-estore.site"
+DOMAINS=("erp.abud.fun" "www.erp.abud.fun")
+TARGET_IP="167.99.157.6"
+EMAIL="admin@erp.abud.fun"
 SLEEP_SECS=180
 MAX_ATTEMPTS=480  # ~24 hours by default
 DRY_RUN=true

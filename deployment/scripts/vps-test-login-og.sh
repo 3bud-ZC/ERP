@@ -3,7 +3,7 @@ set -euo pipefail
 cd /var/www/erp
 ADMIN_EMAIL="$(grep -E '^ADMIN_EMAIL=' .env 2>/dev/null | cut -d= -f2- | tr -d '\r' || echo 'admin@erp.com')"
 ADMIN_PASSWORD="$(grep -E '^ADMIN_PASSWORD=' .env | cut -d= -f2- | tr -d '\r')"
-DOMAIN="og-estore.site"
+DOMAIN="erp.abud.fun"
 rm -f /tmp/erp-og-cookie.txt
 LOGIN="$(curl -s -w "\nHTTP:%{http_code}" -c /tmp/erp-og-cookie.txt -X POST "https://${DOMAIN}/api/auth/login" \
   -H "Content-Type: application/json" \

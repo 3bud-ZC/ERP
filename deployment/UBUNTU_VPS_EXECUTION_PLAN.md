@@ -74,7 +74,7 @@ This plan is for deploying the ERP system on a fresh Ubuntu VPS without performi
 1. Clone into `/var/www/erp`:
    ```bash
    cd /var/www/erp
-   sudo -u erp git clone https://github.com/YOUR_ORG/erp-system.git .
+   sudo -u erp git clone https://github.com/3bud-ZC/ERP.git .
    ```
 2. Copy the production env template:
    ```bash

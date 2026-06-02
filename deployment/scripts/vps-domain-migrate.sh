@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Primary domain migration + SSL for og-estore.site
+# Primary domain migration + SSL for erp.abud.fun
 set -euo pipefail
 
-DOMAIN="og-estore.site"
-WWW="www.og-estore.site"
-TARGET_IP="159.223.167.220"
+DOMAIN="erp.abud.fun"
+WWW="www.erp.abud.fun"
+TARGET_IP="167.99.157.6"
 ERP_DIR="/var/www/erp"
 EMAIL="${CERTBOT_EMAIL:-admin@${DOMAIN}}"
 NGINX_SITE="/etc/nginx/sites-available/erp"
@@ -46,7 +46,7 @@ cat > "$NGINX_SITE" <<'NGINX_HTTP'
 server {
     listen 80;
     listen [::]:80;
-    server_name og-estore.site www.og-estore.site;
+    server_name erp.abud.fun www.erp.abud.fun;
 
     location / {
         proxy_pass http://127.0.0.1:3000;

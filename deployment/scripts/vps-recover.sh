@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ERP_DIR="${ERP_DIR:-/var/www/erp}"
-DOMAIN="${DOMAIN:-erp-abud.com}"
+DOMAIN="${DOMAIN:-erp.abud.fun}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG="/tmp/erp-recover-${STAMP}.log"
 
@@ -42,7 +42,7 @@ check_env JWT_SECRET 32
 check_env SETUP_TOKEN 16
 check_env NEXTAUTH_URL 10
 
-if ! grep -q "erp-abud.com" .env 2>/dev/null; then
+if ! grep -q "erp.abud.fun" .env 2>/dev/null; then
   echo "WARN: NEXTAUTH_URL may not match production domain"
 fi
 

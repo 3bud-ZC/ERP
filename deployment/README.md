@@ -29,6 +29,12 @@ This folder contains production-ready deployment assets for Linux VPS hosting.
    - `ufw allow 'Nginx Full'`
    - `ufw enable`
 
+## GitHub Deploy Flow
+
+- GitHub Actions deploys automatically on pushes to `final`, `main`, or `master`.
+- Each deploy uploads the current GitHub commit to the VPS, builds it there, runs Prisma migrations, and restarts the app.
+- The active release is promoted through `/var/www/erp/current` so the service always boots from the latest validated build.
+
 ## Notes
 
 - `nginx.conf` is VPS-focused and expects certificates under `/etc/letsencrypt/live/your-domain/`.
@@ -37,6 +43,7 @@ This folder contains production-ready deployment assets for Linux VPS hosting.
 - `app` in Docker Compose is bound to `127.0.0.1:3000` only, preventing external access to the Next.js port.
 - `npm run backup` now exists and runs `scripts/backup.ts`.
 - `start:prod` and `start:orchestrated` now enforce startup validation via `scripts/system-start.js` instead of falling back silently to `next start`.
+- `deployment/ecosystem.config.js` and `deployment/erp-system.service` both boot from `/var/www/erp/current` using `npm run start:prod`.
 - SSH hardening is recommended: key-based SSH, disable password login, and restrict root access.
 - For pre-deployment validation, review `deployment/PRE_DEPLOYMENT_CHECKLIST.md`.
 - For log policy and PM2 retention guidance, review `deployment/LOGROTATE_RECOMMENDATIONS.md`.

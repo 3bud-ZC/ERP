@@ -2,9 +2,9 @@
 # Harden nginx: www -> apex, IP/default -> canonical HTTPS domain
 set -euo pipefail
 
-DOMAIN="og-estore.site"
+DOMAIN="erp.abud.fun"
 NGINX_SITE="/etc/nginx/sites-available/erp"
-CERT="/etc/letsencrypt/live/og-estore.site"
+CERT="/etc/letsencrypt/live/erp.abud.fun"
 
 cp -a "$NGINX_SITE" "${NGINX_SITE}.bak-harden-$(date +%Y%m%d_%H%M%S)"
 
@@ -13,14 +13,14 @@ cat > "$NGINX_SITE" <<NGINX
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
-    server_name _ 159.223.167.220;
+    server_name _ 167.99.157.6;
     return 301 https://${DOMAIN}\$request_uri;
 }
 
 server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
-    server_name _ 159.223.167.220;
+    server_name _ 167.99.157.6;
     ssl_certificate ${CERT}/fullchain.pem;
     ssl_certificate_key ${CERT}/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;

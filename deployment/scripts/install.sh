@@ -14,9 +14,14 @@ if ! id "$APP_USER" >/dev/null 2>&1; then
   useradd --system --gid "$APP_GROUP" --home "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
 fi
 mkdir -p "$APP_DIR"
+mkdir -p "$APP_DIR/releases"
+mkdir -p "$APP_DIR/shared"
 mkdir -p "$APP_DIR/logs"
 mkdir -p "$APP_DIR/backups"
 chown -R "$APP_USER":"$APP_GROUP" "$APP_DIR"
+if [ ! -e "$APP_DIR/current" ]; then
+  ln -sfn "$APP_DIR" "$APP_DIR/current"
+fi
 
 echo "Installing system packages..."
 apt-get update

@@ -1,10 +1,10 @@
 module.exports = {
   apps: [
     {
-      name: 'erp-system',
-      script: 'node',
-      args: 'scripts/system-start.js',
-      cwd: '/var/www/erp',
+      name: process.env.PM2_APP || 'erp-system',
+      script: 'npm',
+      args: 'run start:prod',
+      cwd: '/var/www/erp/current',
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
