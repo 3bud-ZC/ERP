@@ -8,7 +8,7 @@
     "vercel-build": "prisma generate && next build",
     "build:analyze": "ANALYZE=true next build",
     "backup": "tsx scripts/backup.ts",
-    "start": "next start -p $PORT",
+    "start": "node .next/standalone/server.js",
     "start:prod": "NODE_ENV=production node scripts/system-start.js",
     "start:orchestrated": "node scripts/system-start.js",
     "start:production": "next start",

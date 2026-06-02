@@ -8,7 +8,10 @@ const staticTarget = path.join(standaloneDir, '.next', 'static');
 const publicSource = path.join(root, 'public');
 const publicTarget = path.join(standaloneDir, 'public');
 const pdfKitDataSource = path.join(root, 'node_modules', 'pdfkit', 'js', 'data');
-const pdfKitDataTarget = path.join(standaloneDir, '.next', 'server', 'chunks', 'data');
+const pdfKitTargets = [
+  path.join(root, '.next', 'server', 'chunks', 'data'),
+  path.join(standaloneDir, '.next', 'server', 'chunks', 'data'),
+];
 
 function copyDir(source, target) {
   if (!fs.existsSync(source)) return;
@@ -24,5 +27,7 @@ if (!fs.existsSync(standaloneDir)) {
 
 copyDir(staticSource, staticTarget);
 copyDir(publicSource, publicTarget);
-copyDir(pdfKitDataSource, pdfKitDataTarget);
-console.log('[standalone-assets] Copied .next/static, public, and pdfkit assets into .next/standalone.');
+for (const target of pdfKitTargets) {
+  copyDir(pdfKitDataSource, target);
+}
+console.log('[standalone-assets] Copied .next/static, public, and pdfkit assets into standalone/server outputs.');

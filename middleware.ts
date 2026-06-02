@@ -246,6 +246,9 @@ export function middleware(request: NextRequest) {
   const publicRoutes = [
     '/login',
     '/onboarding',
+    '/icon.svg',
+    '/icon.png',
+    '/apple-icon.png',
     '/api/auth/login',
     '/api/auth/register',
     '/api/auth/logout',
@@ -293,8 +296,9 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
+     * - root app metadata assets (icon.svg, icon.png, apple-icon.png)
      * - public folder
      */
-    '/((?!_next/static|_next/image|favicon.ico|public).*)',
+    '/((?!_next/static|_next/image|favicon.ico|icon.svg|icon.png|apple-icon.png|public).*)',
   ],
 };
