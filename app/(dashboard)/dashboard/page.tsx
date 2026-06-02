@@ -103,10 +103,11 @@ function DashboardKpi({
   icon: React.ReactNode;
 }) {
   return (
-    <div className="silk-card rounded-2xl p-5">
+    <div className="silk-card relative overflow-hidden rounded-2xl p-5">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-l from-cyan-400 via-indigo-500 to-fuchsia-500" />
       <div className="mb-3 flex items-start justify-between">
         <p className="text-sm text-slate-500">{title}</p>
-        <div className="silk-inset flex h-10 w-10 items-center justify-center rounded-full text-indigo-600">{icon}</div>
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-indigo-600 to-cyan-500 text-white shadow-lg shadow-indigo-200/60">{icon}</div>
       </div>
       <p className="text-3xl font-semibold text-slate-900 leading-tight">{value}</p>
       {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
@@ -257,24 +258,37 @@ export default function DashboardPage() {
             <h3 className="text-2xl font-semibold text-slate-900">حركة 6 شهور (بيانات فعلية)</h3>
             <span className="text-xs text-slate-500">المبيعات مقابل المشتريات</span>
           </div>
-          <div className="grid h-[260px] grid-cols-6 items-end gap-4">
+          <div className="rounded-2xl bg-[radial-gradient(circle_at_top_right,_rgba(59,130,246,0.16),_transparent_36%),radial-gradient(circle_at_bottom_left,_rgba(168,85,247,0.16),_transparent_34%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(241,245,249,0.92))] p-5">
+            <div className="grid h-[260px] grid-cols-6 items-end gap-4">
             {invoiceInsights.monthly.map((m) => {
               const salesH = Math.max(10, Math.round((m.sales / invoiceInsights.maxValue) * 210));
               const purchasesH = Math.max(10, Math.round((m.purchases / invoiceInsights.maxValue) * 210));
               return (
                 <div key={m.key} className="flex flex-col items-center gap-2">
                   <div className="flex h-[220px] items-end gap-2">
-                    <div className="neo-raised w-4 rounded-t-xl bg-indigo-500/80" style={{ height: salesH }} title={`مبيعات: ${moneyEGP(m.sales)}`} />
-                    <div className="neo-raised w-4 rounded-t-xl bg-violet-400/70" style={{ height: purchasesH }} title={`مشتريات: ${moneyEGP(m.purchases)}`} />
+                    <div
+                      className="w-5 rounded-t-2xl bg-gradient-to-t from-indigo-700 via-indigo-500 to-cyan-400 shadow-[0_10px_24px_rgba(79,70,229,0.28)]"
+                      style={{ height: salesH }}
+                      title={`مبيعات: ${moneyEGP(m.sales)}`}
+                    />
+                    <div
+                      className="w-5 rounded-t-2xl bg-gradient-to-t from-fuchsia-700 via-violet-500 to-amber-300 shadow-[0_10px_24px_rgba(168,85,247,0.24)]"
+                      style={{ height: purchasesH }}
+                      title={`مشتريات: ${moneyEGP(m.purchases)}`}
+                    />
                   </div>
-                  <span className="text-xs text-slate-500">{m.label}</span>
+                  <div className="text-center">
+                    <div className="text-[11px] font-semibold text-slate-700">{m.label}</div>
+                    <div className="mt-1 text-[10px] text-slate-500">{moneyEGP(m.sales)}</div>
+                  </div>
                 </div>
               );
             })}
           </div>
-          <div className="mt-4 flex items-center gap-5 text-xs text-slate-500">
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-indigo-500" /> مبيعات</span>
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-violet-400" /> مشتريات</span>
+            <div className="mt-4 flex items-center gap-5 text-xs text-slate-600">
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-indigo-500" /> مبيعات</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-violet-500" /> مشتريات</span>
+            </div>
           </div>
         </div>
 

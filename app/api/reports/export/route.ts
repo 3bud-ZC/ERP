@@ -647,28 +647,59 @@ async function pdfResponse(dataset: ReportDataset): Promise<Response> {
     document.font(fontPath);
   }
 
-  document.fontSize(16).text(dataset.title, { align: 'right' });
-  document.moveDown(0.3);
-  document.fontSize(9).fillColor('#64748b').text(`تاريخ التصدير: ${new Date().toLocaleString('ar-EG')}`, { align: 'right' });
-  document.moveDown();
-  document.fillColor('#0f172a').fontSize(10);
+  const pageWidth = document.page.width - document.page.margins.left - document.page.margins.right;
+  const columnCount = Math.max(1, dataset.columns.length);
+  const columnWidth = pageWidth / columnCount;
+  const rowHeight = 24;
+  const startX = document.page.margins.left;
 
-  const tableRows = [dataset.columns, ...dataset.rows];
-  tableRows.forEach((row, index) => {
-    if (document.y > 760) {
+  const drawHeader = () => {
+    document.fillColor('#0f172a').fontSize(16).text(dataset.title, { align: 'right' });
+    document.moveDown(0.3);
+    document
+      .fontSize(9)
+      .fillColor('#64748b')
+      .text(`تاريخ التصدير: ${new Date().toLocaleString('ar-EG')}`, { align: 'right' });
+    document.moveDown(0.8);
+    drawTableRow(dataset.columns.map(String), true);
+  };
+
+  const drawTableRow = (row: string[], header = false) => {
+    const y = document.y;
+    if (y + rowHeight > document.page.height - document.page.margins.bottom) {
       document.addPage();
       if (fontPath) document.font(fontPath);
-      document.fontSize(10);
+      drawHeader();
+      return drawTableRow(row, header);
     }
-    const line = row.map((cell) => String(cell)).join(' | ');
-    document.text(line, { align: 'right' });
-    if (index === 0) {
-      document.moveDown(0.2);
-      const y = document.y;
-      document.moveTo(36, y).lineTo(559, y).strokeColor('#94a3b8').stroke();
-      document.moveDown(0.4);
+
+    document.save();
+    document.lineWidth(0.6).strokeColor('#cbd5e1');
+    if (header) {
+      document.rect(startX, y, pageWidth, rowHeight).fill('#e2e8f0');
+      document.fillColor('#0f172a');
+    } else {
+      document.rect(startX, y, pageWidth, rowHeight).stroke();
+      document.fillColor('#1e293b');
     }
-  });
+
+    row.forEach((cell, index) => {
+      const x = startX + index * columnWidth;
+      if (!header) {
+        document.rect(x, y, columnWidth, rowHeight).stroke();
+      }
+      document.text(String(cell ?? '—'), x + 6, y + 7, {
+        width: columnWidth - 12,
+        align: 'right',
+        ellipsis: true,
+      });
+    });
+    document.restore();
+    document.y = y + rowHeight;
+  };
+
+  drawHeader();
+  dataset.rows.forEach((row) => drawTableRow(row.map((cell) => String(cell ?? '—'))));
 
   const buffer = await new Promise<Buffer>((resolve, reject) => {
     document.on('error', reject);
