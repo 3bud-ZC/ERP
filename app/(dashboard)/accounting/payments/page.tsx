@@ -9,6 +9,7 @@ import { ArrowDownCircle, ArrowUpCircle, Calculator, PlusCircle, Search, Wallet 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Modal, Field, SelectField, TextAreaField } from '@/components/ui/modal';
 import { Toast, useToast } from '@/components/ui/patterns';
+import { MANUAL_CATEGORY_LABEL, MANUAL_PAYMENT_CATEGORIES } from '@/lib/manual-payment-categories';
 
 interface PaymentAllocation {
   id: string;
@@ -24,6 +25,7 @@ interface PaymentRow {
   type: string;
   source?: 'payment' | 'manual';
   manualCategory?: string;
+  manualParty?: string;
   manualReason?: string;
   cashboxName?: string;
   reconciled?: boolean;
@@ -54,18 +56,25 @@ interface CashboxTransactionsPayload {
   rows?: CashboxTransactionRow[];
 }
 
-const MANUAL_PAYMENT_CATEGORIES = [
-  { value: 'purchase_invoice', label: 'سداد فاتورة مشتريات' },
-  { value: 'wages', label: 'دفع عمالة / رواتب' },
-  { value: 'expense', label: 'مصروف تشغيلي' },
-  { value: 'contractor', label: 'سداد طرف خارجي' },
-  { value: 'other', label: 'سبب آخر' },
-] as const;
+function parseManualDescription(rawValue?: string | null) {
+  const raw = String(rawValue || '').trim();
+  const parts = raw.split('::').map((part) => part.trim()).filter(Boolean);
+  const meta: Record<string, string> = {};
 
-const MANUAL_CATEGORY_LABEL: Record<string, string> = MANUAL_PAYMENT_CATEGORIES.reduce(
-  (acc, c) => ({ ...acc, [c.value]: c.label }),
-  {} as Record<string, string>,
-);
+  for (const part of parts) {
+    const idx = part.indexOf(':');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (key && value) meta[key] = value;
+  }
+
+  return {
+    category: meta.category || 'other',
+    party: meta.party || '',
+    reason: meta.reason || parts.join(' - ') || raw,
+  };
+}
 
 export default function PaymentsPage() {
   const router = useRouter();
@@ -108,18 +117,16 @@ export default function PaymentsPage() {
     const manualRows: PaymentRow[] = (cashboxTxPayload?.rows ?? [])
       .filter((tx) => tx.type === 'manual_out' || tx.type === 'manual_in')
       .map((tx) => {
-        const raw = String(tx.description || '').trim();
-        const [categoryRaw, ...rest] = raw.split('::');
-        const category = categoryRaw.startsWith('category:') ? categoryRaw.replace('category:', '') : 'other';
-        const reasonText = rest.join('::').trim() || raw;
+        const parsed = parseManualDescription(tx.description);
         return {
           id: `manual:${tx.id}`,
           amount: Number(tx.amount || 0),
           date: tx.date,
           type: tx.direction === 'in' ? 'incoming' : 'outgoing',
           source: 'manual',
-          manualCategory: category,
-          manualReason: reasonText,
+          manualCategory: parsed.category,
+          manualParty: parsed.party,
+          manualReason: parsed.reason,
           cashboxName: tx.cashbox?.name || '—',
           reconciled: true,
           allocations: [],
@@ -152,7 +159,7 @@ export default function PaymentsPage() {
       if (to && d && d > new Date(to.getTime() + 86399999)) return false;
 
       if (!q) return true;
-      const party = (p.customer?.nameAr || p.supplier?.nameAr || p.manualReason || '').toLowerCase();
+      const party = (p.customer?.nameAr || p.supplier?.nameAr || p.manualParty || p.manualReason || '').toLowerCase();
       const partyCode = (p.customer?.code || p.supplier?.code || '').toLowerCase();
       const cashbox = (p.cashboxName || '').toLowerCase();
       const category = (p.manualCategory ? (MANUAL_CATEGORY_LABEL[p.manualCategory] || p.manualCategory) : '').toLowerCase();
@@ -169,7 +176,7 @@ export default function PaymentsPage() {
       average: paymentsAll.length ? total / paymentsAll.length : 0,
       count: paymentsAll.length,
     };
-  }, [paymentsAll, payments.length]);
+  }, [paymentsAll]);
   const fmt = (value: number) => `${value.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م`;
 
   const filteredTotals = useMemo(() => {
@@ -332,7 +339,7 @@ export default function PaymentsPage() {
               const allocSum = (p.allocations ?? []).reduce((s, a) => s + Number(a.amount || 0), 0);
               const manualCategory = p.manualCategory ? (MANUAL_CATEGORY_LABEL[p.manualCategory] || p.manualCategory) : '';
               const partyLabel = p.source === 'manual'
-                ? `${manualCategory || 'مدفوع يدوي'}${p.cashboxName ? ` • ${p.cashboxName}` : ''}`
+                ? `${p.manualParty || manualCategory || 'مدفوع يدوي'}${p.cashboxName ? ` • ${p.cashboxName}` : ''}`
                 : party;
               return (
                 <tr key={p.id} className="border-t border-slate-100">

@@ -154,10 +154,10 @@ export function InvoiceDetail({ config }: { config: InvoiceConfig }) {
             className="text-sm text-slate-600 hover:text-slate-900 flex items-center gap-1 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50">
             <Printer className="w-4 h-4" /> طباعة
           </Link>
-          {inv.paymentStatus !== 'paid' && inv.status !== 'cancelled' && config.kind === 'purchase' && (
+          {inv.paymentStatus !== 'paid' && inv.status !== 'cancelled' && (
             <button onClick={() => setPaymentOpen(true)}
               className="text-sm text-emerald-700 hover:bg-emerald-50 flex items-center gap-1 border border-emerald-200 rounded-lg px-3 py-2">
-              <WalletCards className="w-4 h-4" /> سداد
+              <WalletCards className="w-4 h-4" /> {config.kind === 'sales' ? 'تحصيل' : 'سداد'}
             </button>
           )}
           <Link href={`/invoices/${config.routeBase}/${inv.id}/edit`}
@@ -311,10 +311,12 @@ export function InvoiceDetail({ config }: { config: InvoiceConfig }) {
           isOpen={paymentOpen}
           onClose={() => setPaymentOpen(false)}
           invoiceId={inv.id}
+          invoiceType={config.kind}
+          customerId={inv.customer?.id}
           supplierId={inv.supplier?.id}
           defaultAmount={totals.balance}
           onSuccess={() => {
-            showToast('تم السداد بنجاح', 'success');
+            showToast(config.kind === 'sales' ? 'تم التحصيل بنجاح' : 'تم السداد بنجاح', 'success');
             setPaymentOpen(false);
             window.location.reload();
           }}

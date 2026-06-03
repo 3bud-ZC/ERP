@@ -883,6 +883,9 @@ model WorkInProgress {
   laborCost         Float           @default(0)
   overheadCost      Float           @default(0)
   totalCost         Float           @default(0)
+  cashboxId         String?
+  laborPaymentCategory    String    @default("wages")
+  overheadPaymentCategory String    @default("production_cost")
   status            String          @default("in_progress")
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
@@ -891,6 +894,7 @@ model WorkInProgress {
   tenant            Tenant          @relation(fields: [tenantId], references: [id])
 
   @@index([tenantId])
+  @@index([cashboxId])
 }
 
 model ProductionLine {

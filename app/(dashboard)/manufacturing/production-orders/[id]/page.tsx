@@ -32,12 +32,16 @@ interface ProductionOrder {
   product?: { id: string; nameAr?: string; code?: string; unit?: string };
   productionLine?: { id: string; name?: string };
   items?: OrderItem[];
+  productionWastes?: Array<{ id: string; quantity: number; date?: string }>;
   workInProgress?: {
     rawMaterialCost: number;
     laborCost: number;
     overheadCost: number;
     totalCost: number;
     status: string;
+    cashboxId?: string | null;
+    laborPaymentCategory?: string;
+    overheadPaymentCategory?: string;
   } | null;
 }
 
@@ -65,6 +69,8 @@ export default function ProductionOrderDetailPage() {
   const [error, setError]     = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [marginPercent, setMarginPercent] = useState('25');
+  const [completionOpen, setCompletionOpen] = useState(false);
+  const [actualOutputInput, setActualOutputInput] = useState('');
 
   function load() {
     setLoading(true);
@@ -124,6 +130,7 @@ export default function ProductionOrderDetailPage() {
       ? order.workInProgress.totalCost 
       : wipRawMaterialCost + (order.workInProgress?.laborCost ?? 0) + (order.workInProgress?.overheadCost ?? 0)) ||
     (order.cost ?? 0);
+  const wasteQty = (order.productionWastes ?? []).reduce((sum, waste) => sum + Number(waste.quantity || 0), 0);
   const outputQty = order.actualOutputQuantity || order.produced || order.plannedQuantity || order.quantity || 0;
   const costPerUnit = outputQty > 0 ? totalCost / outputQty : 0;
   const margin = Math.min(95, Math.max(0, parseFloat(marginPercent) || 0));
@@ -170,6 +177,7 @@ export default function ProductionOrderDetailPage() {
               <Detail label="التاريخ"          value={new Date(order.date).toLocaleDateString('ar-EG')} />
               <Detail label="الكمية المخططة" value={`${(order.plannedQuantity ?? order.quantity).toLocaleString('ar-EG')} ${order.product?.unit ?? ''}`} />
               <Detail label="الكمية المنتجة" value={`${(order.actualOutputQuantity ?? order.produced ?? 0).toLocaleString('ar-EG')} ${order.product?.unit ?? ''}`} />
+              <Detail label="الفاقد" value={`${wasteQty.toLocaleString('ar-EG')} ${order.product?.unit ?? ''}`} />
             </div>
             {order.notes && (
               <div className="mt-4 pt-4 border-t border-slate-100 text-sm">
@@ -222,7 +230,8 @@ export default function ProductionOrderDetailPage() {
               <CostRow label="مواد خام"       value={fmtMoney(wipRawMaterialCost)} />
               <CostRow label="عمالة"           value={fmtMoney(order.workInProgress?.laborCost)} />
               <CostRow label="تشغيل"           value={fmtMoney(order.workInProgress?.overheadCost)} />
-              <CostRow label="تكلفة الوحدة" value={fmtMoney(costPerUnit)} />
+              <CostRow label="الفاقد" value={`${wasteQty.toLocaleString('ar-EG')} ${order.product?.unit ?? ''}`} />
+              <CostRow label="متوسط تكلفة الوحدة" value={fmtMoney(costPerUnit)} />
               <div className="border-t border-slate-200 pt-2 mt-2">
                 <CostRow label="الإجمالي" value={fmtMoney(totalCost)} bold />
               </div>
@@ -263,10 +272,13 @@ export default function ProductionOrderDetailPage() {
               )}
               {(order.status === 'approved' || order.status === 'in_progress' || order.status === 'waiting') && (
                 <ActionButton
-                  onClick={() => changeStatus('completed', { actualOutputQuantity: order.plannedQuantity ?? order.quantity })}
+                  onClick={() => {
+                    setActualOutputInput(String(order.plannedQuantity ?? order.quantity ?? 0));
+                    setCompletionOpen(true);
+                  }}
                   disabled={running}
                   icon={CheckCircle}
-                  label="إكمال الأمر (يضيف المنتج للمخزون)"
+                  label="إكمال الأمر وتسجيل الفاقد"
                   className="bg-emerald-600 hover:bg-emerald-700 text-white"
                 />
               )}
@@ -295,6 +307,57 @@ export default function ProductionOrderDetailPage() {
           </Section>
         </div>
       </div>
+
+      {completionOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" dir="rtl">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="text-lg font-bold text-slate-900">إكمال أمر الإنتاج</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              أدخل الكمية المنتجة فعليًا. أي فرق عن الكمية المخططة سيسجل كفاقد ويؤثر على متوسط تكلفة الوحدة.
+            </p>
+            <div className="mt-4 space-y-4">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">الكمية المنتجة فعليًا</label>
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={actualOutputInput}
+                  onChange={(e) => setActualOutputInput(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
+                الكمية المخططة: {(order.plannedQuantity ?? order.quantity).toLocaleString('ar-EG')} {order.product?.unit ?? ''}
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setCompletionOpen(false)}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const actualQty = Number(actualOutputInput);
+                  if (!Number.isFinite(actualQty) || actualQty <= 0) {
+                    showToast('الكمية المنتجة فعليًا يجب أن تكون أكبر من صفر', 'error');
+                    return;
+                  }
+                  setCompletionOpen(false);
+                  void changeStatus('completed', { actualOutputQuantity: actualQty });
+                }}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+              >
+                تأكيد الإكمال
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

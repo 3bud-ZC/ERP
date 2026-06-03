@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { X, Save, WalletCards } from 'lucide-react';
 import { apiGetList } from '@/lib/api/fetcher';
@@ -16,6 +16,8 @@ export function PaymentModal({
   onClose,
   defaultAmount,
   invoiceId,
+  invoiceType,
+  customerId,
   supplierId,
   onSuccess,
 }: {
@@ -23,6 +25,8 @@ export function PaymentModal({
   onClose: () => void;
   defaultAmount: number;
   invoiceId?: string;
+  invoiceType: 'sales' | 'purchase';
+  customerId?: string;
   supplierId?: string;
   onSuccess: () => void;
 }) {
@@ -39,7 +43,21 @@ export function PaymentModal({
     enabled: isOpen,
   });
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setAmount(defaultAmount.toString());
+    setDate(new Date().toISOString().split('T')[0]);
+    setCashboxId('');
+    setNotes('');
+    setError('');
+  }, [defaultAmount, isOpen]);
+
   if (!isOpen) return null;
+
+  const isSalesReceipt = invoiceType === 'sales';
+  const modalTitle = isSalesReceipt ? 'تحصيل دفعة' : 'سداد دفعة';
+  const submitLabel = isSalesReceipt ? 'تأكيد التحصيل' : 'تأكيد السداد';
+  const pendingLabel = isSalesReceipt ? 'جاري التحصيل...' : 'جاري السداد...';
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -53,10 +71,12 @@ export function PaymentModal({
       const payload: any = {
         amount: numAmount,
         date,
-        type: 'outgoing',
+        type: isSalesReceipt ? 'incoming' : 'outgoing',
         cashboxId,
         notes: notes.trim() || undefined,
+        customerId,
         supplierId,
+        salesInvoiceId: isSalesReceipt ? invoiceId : undefined,
         purchaseInvoiceId: invoiceId,
         allocations: [],
       };
@@ -64,12 +84,16 @@ export function PaymentModal({
       if (invoiceId) {
         payload.allocations.push({
           invoiceId,
-          invoiceType: 'purchase',
+          invoiceType: isSalesReceipt ? 'sales' : 'purchase',
           amount: numAmount,
         });
       }
 
+      if (isSalesReceipt) delete payload.purchaseInvoiceId;
+      else delete payload.salesInvoiceId;
+
       const res = await fetch('/api/payments', {
+        credentials: 'include',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -97,7 +121,7 @@ export function PaymentModal({
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
               <WalletCards className="h-5 w-5" />
             </div>
-            <h2 className="text-lg font-bold text-slate-900">سداد دفعة</h2>
+            <h2 className="text-lg font-bold text-slate-900">{modalTitle}</h2>
           </div>
           <button onClick={onClose} className="rounded-full p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600">
             <X className="h-5 w-5" />
@@ -171,7 +195,7 @@ export function PaymentModal({
               disabled={saving}
               className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
             >
-              <Save className="h-4 w-4" /> {saving ? 'جاري السداد...' : 'تأكيد السداد'}
+              <Save className="h-4 w-4" /> {saving ? pendingLabel : submitLabel}
             </button>
           </div>
         </form>

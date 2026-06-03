@@ -90,7 +90,6 @@ const navItems: NavItem[] = [
       { title: 'أوامر الإنتاج',  href: '/manufacturing/production-orders' },
       { title: 'قوائم المواد',   href: '/manufacturing/bom' },
       { title: 'خطوط الإنتاج',   href: '/manufacturing/production-lines' },
-      { title: 'الفاقد',          href: '/manufacturing/waste' },
     ],
   },
   {

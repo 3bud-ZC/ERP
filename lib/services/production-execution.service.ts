@@ -22,6 +22,10 @@ import {
 import { assertCanPostReference } from '@/lib/services/posting-guard.service';
 import { reverseJournalEntriesByReferenceId } from '@/lib/services/journal-reversal.service';
 import { toArabicError } from '@/lib/utils/arabic-errors';
+import {
+  recordCashboxTransactionInTx,
+  reverseCashboxTransactionsInTx,
+} from '@/lib/services/cashbox.service';
 
 export type ProductionExecutionError = InvoiceExecutionError;
 
@@ -40,6 +44,19 @@ export interface CreateProductionOrderInput {
   productionLineId?: string;
   laborCost?: number;
   overheadCost?: number;
+  cashboxId?: string;
+  laborPaymentCategory?: string;
+  overheadPaymentCategory?: string;
+}
+
+const PRODUCTION_COST_REF = 'ProductionOrderCost';
+
+function buildProductionCostDescription(params: {
+  category: string;
+  orderNumber: string;
+  reason: string;
+}) {
+  return `category:${params.category}::party:أمر إنتاج ${params.orderNumber}::reason:${params.reason}`;
 }
 
 async function consumeRawMaterialsInTx(
@@ -53,10 +70,26 @@ async function consumeRawMaterialsInTx(
     items: ProductionMaterialLine[];
     laborCost: number;
     overheadCost: number;
+    cashboxId?: string;
+    laborPaymentCategory: string;
+    overheadPaymentCategory: string;
     profile: Awaited<ReturnType<typeof getPostingProfile>>;
   },
 ): Promise<{ rawMaterialCost: number; totalCost: number }> {
-  const { tenantId, userId, productionOrderId, orderNumber, entryDate, items, laborCost, overheadCost, profile } =
+  const {
+    tenantId,
+    userId,
+    productionOrderId,
+    orderNumber,
+    entryDate,
+    items,
+    laborCost,
+    overheadCost,
+    cashboxId,
+    laborPaymentCategory,
+    overheadPaymentCategory,
+    profile,
+  } =
     params;
 
   let rawMaterialCost = 0;
@@ -114,6 +147,44 @@ async function consumeRawMaterialsInTx(
     });
   }
 
+  if (cashboxId && laborCost > 0.001) {
+    await recordCashboxTransactionInTx(tx, {
+      tenantId,
+      cashboxId,
+      type: 'manual_out',
+      direction: 'out',
+      amount: laborCost,
+      date: entryDate,
+      referenceType: PRODUCTION_COST_REF,
+      referenceId: productionOrderId,
+      description: buildProductionCostDescription({
+        category: laborPaymentCategory,
+        orderNumber,
+        reason: `عمالة مباشرة لأمر الإنتاج ${orderNumber}`,
+      }),
+      createdBy: userId,
+    });
+  }
+
+  if (cashboxId && overheadCost > 0.001) {
+    await recordCashboxTransactionInTx(tx, {
+      tenantId,
+      cashboxId,
+      type: 'manual_out',
+      direction: 'out',
+      amount: overheadCost,
+      date: entryDate,
+      referenceType: PRODUCTION_COST_REF,
+      referenceId: productionOrderId,
+      description: buildProductionCostDescription({
+        category: overheadPaymentCategory,
+        orderNumber,
+        reason: `تشغيل لأمر الإنتاج ${orderNumber}`,
+      }),
+      createdBy: userId,
+    });
+  }
+
   return { rawMaterialCost, totalCost };
 }
 
@@ -127,6 +198,8 @@ export async function executeCreateProductionOrder(params: {
   const status = orderData.status || 'pending';
   const laborCost = orderData.laborCost ?? 0;
   const overheadCost = orderData.overheadCost ?? 0;
+  const laborPaymentCategory = orderData.laborPaymentCategory || 'wages';
+  const overheadPaymentCategory = orderData.overheadPaymentCategory || 'production_cost';
   const profile = await getPostingProfile(tenantId);
 
   return prisma.$transaction(
@@ -164,6 +237,9 @@ export async function executeCreateProductionOrder(params: {
           laborCost,
           overheadCost,
           totalCost: laborCost + overheadCost,
+          cashboxId: orderData.cashboxId,
+          laborPaymentCategory,
+          overheadPaymentCategory,
           status: 'pending',
           tenantId,
         },
@@ -179,6 +255,9 @@ export async function executeCreateProductionOrder(params: {
           items: materialLines,
           laborCost,
           overheadCost,
+          cashboxId: orderData.cashboxId,
+          laborPaymentCategory,
+          overheadPaymentCategory,
           profile,
         });
 
@@ -199,7 +278,13 @@ export async function executeCreateProductionOrder(params: {
 
       return tx.productionOrder.findUniqueOrThrow({
         where: { id: order.id },
-        include: { items: true, product: true, productionLine: true, workInProgress: true },
+        include: {
+          items: true,
+          product: true,
+          productionLine: true,
+          workInProgress: true,
+          productionWastes: true,
+        },
       });
     },
     { isolationLevel: 'Serializable', maxWait: 15000, timeout: 60000 },
@@ -248,6 +333,9 @@ export async function executeApproveProductionOrder(params: {
         items: materialLines,
         laborCost: wip.laborCost,
         overheadCost: wip.overheadCost,
+        cashboxId: wip.cashboxId ?? undefined,
+        laborPaymentCategory: wip.laborPaymentCategory || 'wages',
+        overheadPaymentCategory: wip.overheadPaymentCategory || 'production_cost',
         profile,
       });
 
@@ -263,7 +351,7 @@ export async function executeApproveProductionOrder(params: {
       const updated = await tx.productionOrder.update({
         where: { id: order.id },
         data: { status: 'approved', cost: costs.totalCost },
-        include: { items: true, product: true, workInProgress: true, productionLine: true },
+        include: { items: true, product: true, workInProgress: true, productionLine: true, productionWastes: true },
       });
 
       return updated;
@@ -366,7 +454,7 @@ export async function executeCompleteProductionOrder(params: {
           remaining: 0,
           cost: wip.totalCost,
         },
-        include: { items: true, product: true, workInProgress: true, productionLine: true },
+        include: { items: true, product: true, workInProgress: true, productionLine: true, productionWastes: true },
       });
     },
     { isolationLevel: 'Serializable', maxWait: 15000, timeout: 60000 },
@@ -400,6 +488,12 @@ export async function executeCancelProductionOrder(params: {
     async tx => {
       await reverseJournalEntriesByReferenceId(tx, params.tenantId, order.id, 'ProductionOrder');
       await reverseInvoiceStockMovements(tx, params.tenantId, order.id, ['ProductionOrder']);
+      await reverseCashboxTransactionsInTx(tx, {
+        tenantId: params.tenantId,
+        referenceType: PRODUCTION_COST_REF,
+        referenceId: order.id,
+        createdBy: params.userId,
+      });
       await tx.productionWaste.deleteMany({ where: { productionOrderId: order.id } });
       await tx.workInProgress.updateMany({
         where: { productionOrderId: order.id },
@@ -414,7 +508,7 @@ export async function executeCancelProductionOrder(params: {
           produced: 0,
           remaining: order.plannedQuantity || order.quantity,
         },
-        include: { items: true, product: true, workInProgress: true, productionLine: true },
+        include: { items: true, product: true, workInProgress: true, productionLine: true, productionWastes: true },
       });
     },
     { isolationLevel: 'Serializable', maxWait: 15000, timeout: 60000 },
@@ -439,6 +533,12 @@ export async function executeDeleteProductionOrder(params: {
     async tx => {
       await reverseJournalEntriesByReferenceId(tx, params.tenantId, order.id, 'ProductionOrder');
       await reverseInvoiceStockMovements(tx, params.tenantId, order.id, ['ProductionOrder']);
+      await reverseCashboxTransactionsInTx(tx, {
+        tenantId: params.tenantId,
+        referenceType: PRODUCTION_COST_REF,
+        referenceId: order.id,
+        createdBy: params.userId,
+      });
 
       await tx.productionWaste.deleteMany({ where: { productionOrderId: order.id } });
       await tx.workInProgress.deleteMany({ where: { productionOrderId: order.id } });
