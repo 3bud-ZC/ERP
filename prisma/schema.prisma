@@ -760,6 +760,9 @@ model StockAdjustment {
   type             String
   quantity         Float
   reason           String
+  applyToStock     Boolean       @default(true)
+  sourceType       String?
+  sourceId         String?
   status           String        @default("pending")
   journalEntryId   String?       @unique
   date             DateTime
@@ -775,6 +778,7 @@ model StockAdjustment {
   @@index([date])
   @@index([status])
   @@index([tenantId])
+  @@index([sourceType, sourceId])
 }
 
 model StockTransfer {

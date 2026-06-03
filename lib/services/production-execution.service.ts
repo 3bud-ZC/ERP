@@ -4,6 +4,7 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { CODE_ENTITY_KEYS, allocateEntityCode } from '@/lib/code-sequence.service';
 import { InvoiceExecutionError } from '@/lib/services/execution-errors';
 import { getPostingProfile } from '@/lib/services/accounting-posting-profile.service';
 import { postJournalLinesInTransaction } from '@/lib/services/invoice-accounting.service';
@@ -50,6 +51,7 @@ export interface CreateProductionOrderInput {
 }
 
 const PRODUCTION_COST_REF = 'ProductionOrderCost';
+const AUTO_PRODUCTION_WASTE_ADJUSTMENT_REF = 'ProductionOrderWasteAuto';
 
 function buildProductionCostDescription(params: {
   category: string;
@@ -57,6 +59,43 @@ function buildProductionCostDescription(params: {
   reason: string;
 }) {
   return `category:${params.category}::party:أمر إنتاج ${params.orderNumber}::reason:${params.reason}`;
+}
+
+async function createAutoWasteStockAdjustmentInTx(
+  tx: Prisma.TransactionClient,
+  params: {
+    tenantId: string;
+    productId: string;
+    productionOrderId: string;
+    orderNumber: string;
+    quantity: number;
+    date: Date;
+    plannedQuantity: number;
+    actualOutputQuantity: number;
+  },
+) {
+  const adjustmentNumber = await allocateEntityCode(
+    CODE_ENTITY_KEYS.STOCK_ADJUSTMENT,
+    params.tenantId,
+    tx,
+  );
+
+  return tx.stockAdjustment.create({
+    data: {
+      adjustmentNumber,
+      productId: params.productId,
+      type: 'decrease',
+      quantity: params.quantity,
+      reason: 'lost',
+      applyToStock: false,
+      sourceType: AUTO_PRODUCTION_WASTE_ADJUSTMENT_REF,
+      sourceId: params.productionOrderId,
+      status: 'approved',
+      date: params.date,
+      notes: `أمر الإنتاج ${params.orderNumber} - المخطط ${params.plannedQuantity} - المنتج فعليًا ${params.actualOutputQuantity}`,
+      tenantId: params.tenantId,
+    },
+  });
 }
 
 async function consumeRawMaterialsInTx(
@@ -438,6 +477,17 @@ export async function executeCompleteProductionOrder(params: {
             tenantId: params.tenantId,
           },
         });
+
+        await createAutoWasteStockAdjustmentInTx(tx, {
+          tenantId: params.tenantId,
+          productId: order.productId,
+          productionOrderId: order.id,
+          orderNumber: order.orderNumber,
+          quantity: waste,
+          date: new Date(),
+          plannedQuantity: plannedQty,
+          actualOutputQuantity: outputQty,
+        });
       }
 
       await tx.workInProgress.update({
@@ -494,6 +544,14 @@ export async function executeCancelProductionOrder(params: {
         referenceId: order.id,
         createdBy: params.userId,
       });
+      await tx.stockAdjustment.deleteMany({
+        where: {
+          tenantId: params.tenantId,
+          sourceType: AUTO_PRODUCTION_WASTE_ADJUSTMENT_REF,
+          sourceId: order.id,
+          applyToStock: false,
+        },
+      });
       await tx.productionWaste.deleteMany({ where: { productionOrderId: order.id } });
       await tx.workInProgress.updateMany({
         where: { productionOrderId: order.id },
@@ -538,6 +596,14 @@ export async function executeDeleteProductionOrder(params: {
         referenceType: PRODUCTION_COST_REF,
         referenceId: order.id,
         createdBy: params.userId,
+      });
+      await tx.stockAdjustment.deleteMany({
+        where: {
+          tenantId: params.tenantId,
+          sourceType: AUTO_PRODUCTION_WASTE_ADJUSTMENT_REF,
+          sourceId: order.id,
+          applyToStock: false,
+        },
       });
 
       await tx.productionWaste.deleteMany({ where: { productionOrderId: order.id } });
