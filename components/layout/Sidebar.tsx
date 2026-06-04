@@ -116,6 +116,7 @@ const navItems: NavItem[] = [
       { title: 'تقرير المبيعات',   href: '/reports/sales' },
       { title: 'تقرير المشتريات',  href: '/reports/purchases' },
       { title: 'تقرير المخازن',     href: '/reports/inventory' },
+      { title: 'تقرير الفاقد',      href: '/reports/waste' },
       { title: 'تقرير المصروفات',   href: '/reports/expenses' },
       { title: 'كشف حساب عميل',    href: '/reports/customer-statement' },
       { title: 'كشف حساب مورد',    href: '/reports/supplier-statement' },

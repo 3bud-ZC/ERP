@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 import {
   TrendingUp, ShoppingCart, Package, BookOpen, Users, Truck,
-  Clock, Receipt, Factory, ChevronLeft, BarChart3,
+  Clock, Receipt, Factory, ChevronLeft, BarChart3, TriangleAlert,
 } from 'lucide-react';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import { useAuthStore } from '@/lib/store/auth';
@@ -28,6 +28,12 @@ const REPORTS = [
     href: '/reports/inventory', title: 'تقرير المخازن',
     description: 'أرصدة المخزون وقيمته وحدود إعادة الطلب',
     icon: Package, accent: 'bg-amber-50 text-amber-600',
+  },
+  {
+    key: 'waste',
+    href: '/reports/waste', title: 'تقرير الفاقد',
+    description: 'يجمع فاقد أوامر الإنتاج وتسويات المخزون بدون تكرار',
+    icon: TriangleAlert, accent: 'bg-rose-50 text-rose-700',
   },
   {
     key: 'expenses',

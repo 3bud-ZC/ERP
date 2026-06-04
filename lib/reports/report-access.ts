@@ -3,6 +3,7 @@ export type ReportKey =
   | 'sales'
   | 'purchases'
   | 'inventory'
+  | 'waste'
   | 'expenses'
   | 'customer-statement'
   | 'supplier-statement'
@@ -24,6 +25,7 @@ export const REPORT_TABS: ReportTab[] = [
   { key: 'sales', href: '/reports/sales', title: 'المبيعات' },
   { key: 'purchases', href: '/reports/purchases', title: 'المشتريات' },
   { key: 'inventory', href: '/reports/inventory', title: 'المخازن' },
+  { key: 'waste', href: '/reports/waste', title: 'الفاقد' },
   { key: 'expenses', href: '/reports/expenses', title: 'المصروفات' },
   { key: 'customer-statement', href: '/reports/customer-statement', title: 'كشف عميل' },
   { key: 'supplier-statement', href: '/reports/supplier-statement', title: 'كشف مورد' },
@@ -40,6 +42,7 @@ const REPORT_PERMISSIONS: Record<ReportKey, string[]> = {
   sales: ['reports_full_access', 'view_sales_reports', 'view_sales', 'read_sales_invoice', 'sales_full_access'],
   purchases: ['reports_full_access', 'view_purchase', 'read_purchase_invoice', 'purchase_full_access'],
   inventory: ['reports_full_access', 'read_inventory', 'inventory_full_access', 'manage_inventory', 'view_products'],
+  waste: ['reports_full_access', 'read_inventory', 'inventory_full_access', 'manage_inventory', 'production_full_access', 'read_production_order'],
   expenses: ['reports_full_access', 'view_accounting', 'manage_accounting', 'view_financial_reports', 'accounting_full_access'],
   'customer-statement': ['reports_full_access', 'view_accounting', 'view_financial_reports', 'accounting_full_access', 'view_sales_reports'],
   'supplier-statement': ['reports_full_access', 'view_accounting', 'view_financial_reports', 'accounting_full_access', 'view_purchase'],

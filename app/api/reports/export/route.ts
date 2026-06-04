@@ -6,6 +6,7 @@ import { prisma } from '@/lib/db';
 import { apiError, handleApiError } from '@/lib/api-response';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { hasReportAccess, type ReportKey } from '@/lib/reports/report-access';
+import { buildWasteReportData, type WasteReportSource } from '@/lib/reports/waste-report';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -20,6 +21,7 @@ const REPORT_KEYS = new Set<ReportKey>([
   'sales',
   'purchases',
   'inventory',
+  'waste',
   'expenses',
   'customer-statement',
   'supplier-statement',
@@ -62,6 +64,8 @@ async function buildDataset(report: ReportKey, tenantId: string, params: URLSear
       return buildPurchasesDataset(tenantId, params);
     case 'inventory':
       return buildInventoryDataset(tenantId, params);
+    case 'waste':
+      return buildWasteDataset(tenantId, params);
     case 'expenses':
       return buildExpensesDataset(tenantId, params);
     case 'customer-statement':
@@ -256,6 +260,31 @@ async function buildExpensesDataset(tenantId: string, params: URLSearchParams): 
       expense.cashboxId ? 'مرتبط بخزنة' : 'غير محدد',
       Number(expense.amount || 0),
       expense.description || '-',
+    ]),
+  };
+}
+
+async function buildWasteDataset(tenantId: string, params: URLSearchParams): Promise<ReportDataset> {
+  const source = (params.get('source') || 'all') as WasteReportSource;
+  const data = await buildWasteReportData({
+    tenantId,
+    fromDate: parseDate(params.get('fromDate')),
+    toDate: endOfDay(parseDate(params.get('toDate'))),
+    productId: params.get('productId') || undefined,
+    source,
+  });
+
+  return {
+    title: 'تقرير الفاقد',
+    columns: ['التاريخ', 'المنتج', 'المصدر', 'المرجع', 'الكمية', 'الوحدة', 'ملاحظات'],
+    rows: data.rows.map((row) => [
+      toArDate(row.date),
+      `${row.productName} (${row.productCode})`,
+      row.sourceLabel,
+      row.reference || '—',
+      row.quantity,
+      row.unit || '',
+      row.notes || '—',
     ]),
   };
 }
