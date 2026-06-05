@@ -591,19 +591,34 @@ async function buildProfitLossDataset(tenantId: string, params: URLSearchParams)
 async function buildBalanceSheetDataset(tenantId: string, params: URLSearchParams): Promise<ReportDataset> {
   const asOfDate = endOfDay(parseDate(params.get('asOfDate')));
   const data = await buildBalanceSheetData(tenantId, asOfDate);
-  const rows: Array<Array<string | number>> = [
-    ...data.assets.lines.map((line) => ['الأصول', line.code, line.nameAr, line.amount]),
-    ...data.liabilities.lines.map((line) => ['الخصوم', line.code, line.nameAr, line.amount]),
-    ...data.equity.lines.map((line) => ['حقوق الملكية', line.code, line.nameAr, line.amount]),
-    ['حقوق الملكية', 'NI', 'صافي الربح للفترة', data.equity.netIncome],
-    ['', '', 'إجمالي الأصول', data.summary.totalAssets],
-    ['', '', 'إجمالي الخصوم + حقوق الملكية', data.summary.totalLiabilitiesAndEquity],
-    ['', '', 'الفرق', data.summary.difference],
+  const sections = [
+    data.sections.fixedAssets,
+    data.sections.currentAssets,
+    data.sections.treasury,
+    data.sections.inventory,
+    data.sections.customers,
+    data.sections.suppliers,
+    data.sections.expenses,
+    data.sections.liabilities,
+    data.sections.equity,
   ];
+
+  const rows: Array<Array<string | number>> = [];
+  for (const section of sections) {
+    rows.push([section.title, '', '', section.total]);
+    for (const row of section.rows) {
+      rows.push([section.title, row.label, row.source, row.amount]);
+    }
+  }
+  rows.push(['', 'إجمالي الأصول', '', data.summary.totalAssets]);
+  rows.push(['', 'إجمالي الالتزامات', '', data.summary.totalLiabilities]);
+  rows.push(['', 'صافي المركز المالي', '', data.summary.netFinancialPosition]);
+  rows.push(['', 'إجمالي الخصوم + حقوق الملكية', '', data.summary.totalLiabilitiesAndEquity]);
+  rows.push(['', 'الفرق', '', data.summary.difference]);
 
   return {
     title: 'الميزانية العمومية',
-    columns: ['النوع', 'الكود', 'الحساب', 'الرصيد'],
+    columns: ['القسم', 'البند', 'المصدر', 'القيمة'],
     rows,
   };
 }

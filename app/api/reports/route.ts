@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
+import { buildBalanceSheetData } from '@/lib/reports/balance-sheet';
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
@@ -91,87 +92,26 @@ async function getProfitAndLossReport(tenantId: string, fromDate?: Date, toDate?
 
 async function getBalanceSheet(tenantId: string, asOfDate?: Date) {
   const date = asOfDate || new Date();
-
-  // SINGLE QUERY to get all account balances at once
-  const accountBalances = await prisma.journalEntryLine.groupBy({
-    by: ['accountCode'],
-    where: {
-      tenantId,
-      journalEntry: {
-        tenantId,
-        isPosted: true,
-        entryDate: { lte: date },
-      },
-    },
-    _sum: {
-      debit: true,
-      credit: true,
-    },
-  });
-
-  // Fetch account details once
-  const accounts = await prisma.account.findMany({
-    where: { tenantId, isActive: true },
-  });
-
-  // Calculate balances in application memory using aggregated data
-  const balanceMap = new Map();
-  accountBalances.forEach(ab => {
-    const account = accounts.find(a => a.code === ab.accountCode);
-    if (!account) return;
-    
-    const isCreditNormal = ['Liability', 'Equity', 'Revenue'].includes(account.type);
-    const balance = isCreditNormal
-      ? Number(ab._sum.credit) - Number(ab._sum.debit)
-      : Number(ab._sum.debit) - Number(ab._sum.credit);
-    
-    balanceMap.set(ab.accountCode, balance);
-  });
-
-  const assets: any = {};
-  const liabilities: any = {};
-  const equity: any = {};
-
-  for (const account of accounts) {
-    const balance = balanceMap.get(account.code) || 0;
-    
-    const accountData = {
-      code: account.code,
-      nameAr: account.nameAr || account.nameEn,
-      balance,
-    };
-
-    if (account.type === 'Asset') {
-      assets[account.code] = accountData;
-    } else if (account.type === 'Liability') {
-      liabilities[account.code] = accountData;
-    } else if (account.type === 'Equity') {
-      equity[account.code] = accountData;
-    }
-  }
-
-  const totalAssets = Object.values(assets).reduce((sum: number, acc: any) => sum + acc.balance, 0);
-  const totalLiabilities = Object.values(liabilities).reduce((sum: number, acc: any) => sum + acc.balance, 0);
-  const totalEquity = Object.values(equity).reduce((sum: number, acc: any) => sum + acc.balance, 0);
+  const data = await buildBalanceSheetData(tenantId, date);
 
   return {
     asOfDate: date,
     assets: {
-      items: assets,
-      total: totalAssets,
+      items: Object.fromEntries(data.assets.lines.map((row) => [row.code, { code: row.code, nameAr: row.label, balance: row.amount }])),
+      total: data.summary.totalAssets,
     },
     liabilities: {
-      items: liabilities,
-      total: totalLiabilities,
+      items: Object.fromEntries(data.liabilities.lines.map((row) => [row.code, { code: row.code, nameAr: row.label, balance: row.amount }])),
+      total: data.summary.totalLiabilities,
     },
     equity: {
-      items: equity,
-      total: totalEquity,
+      items: Object.fromEntries(data.equity.lines.map((row) => [row.code, { code: row.code, nameAr: row.label, balance: row.amount }])),
+      total: data.summary.totalEquity,
     },
     summary: {
-      totalAssets,
-      totalLiabilitiesAndEquity: totalLiabilities + totalEquity,
-      isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+      totalAssets: data.summary.totalAssets,
+      totalLiabilitiesAndEquity: data.summary.totalLiabilitiesAndEquity,
+      isBalanced: data.summary.isBalanced,
     },
   };
 }
