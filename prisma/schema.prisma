@@ -41,6 +41,7 @@ model Tenant {
   journalEntries        JournalEntry[]
   outboxEvents          OutboxEvent[]
   payments              Payment[]
+  partyDebtTransactions PartyDebtTransaction[]
   products              Product[]
   productionLines       ProductionLine[]
   productionOrders      ProductionOrder[]
@@ -171,50 +172,58 @@ model Company {
 }
 
 model Supplier {
-  id                   String                @id @default(cuid())
-  code                 String                @unique
+  id                   String                 @id @default(cuid())
+  code                 String                 @unique
   nameAr               String
   nameEn               String?
   phone                String?
   email                String?
   address              String?
   taxNumber            String?
-  creditLimit          Float                 @default(0)
-  isActive             Boolean               @default(true)
+  creditLimit          Float                  @default(0)
+  openingBalanceType   String?
+  openingBalanceAmount Float                  @default(0)
+  openingBalanceDate   DateTime?
+  isActive             Boolean                @default(true)
   tenantId             String
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  debtTransactions     PartyDebtTransaction[]
   payments             Payment[]
   purchaseInvoices     PurchaseInvoice[]
   purchaseOrders       PurchaseOrder[]
   purchaseRequisitions PurchaseRequisition[]
   purchaseReturns      PurchaseReturn[]
-  tenant               Tenant                @relation(fields: [tenantId], references: [id])
+  tenant               Tenant                 @relation(fields: [tenantId], references: [id])
 
   @@index([id])
   @@index([tenantId])
 }
 
 model Customer {
-  id            String         @id @default(cuid())
-  code          String         @unique
-  nameAr        String
-  nameEn        String?
-  phone         String?
-  email         String?
-  address       String?
-  taxNumber     String?
-  creditLimit   Float          @default(0)
-  isActive      Boolean        @default(true)
-  tenantId      String
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  tenant        Tenant         @relation(fields: [tenantId], references: [id])
-  payments      Payment[]
-  quotations    Quotation[]
-  salesInvoices SalesInvoice[]
-  salesOrders   SalesOrder[]
-  salesReturns  SalesReturn[]
+  id                   String                 @id @default(cuid())
+  code                 String                 @unique
+  nameAr               String
+  nameEn               String?
+  phone                String?
+  email                String?
+  address              String?
+  taxNumber            String?
+  creditLimit          Float                  @default(0)
+  openingBalanceType   String?
+  openingBalanceAmount Float                  @default(0)
+  openingBalanceDate   DateTime?
+  isActive             Boolean                @default(true)
+  tenantId             String
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  debtTransactions     PartyDebtTransaction[]
+  tenant               Tenant                 @relation(fields: [tenantId], references: [id])
+  payments             Payment[]
+  quotations           Quotation[]
+  salesInvoices        SalesInvoice[]
+  salesOrders          SalesOrder[]
+  salesReturns         SalesReturn[]
 
   @@index([id])
   @@index([tenantId])
@@ -881,21 +890,21 @@ model StocktakeItem {
 }
 
 model WorkInProgress {
-  id                String          @id @default(cuid())
-  productionOrderId String          @unique
-  rawMaterialCost   Float           @default(0)
-  laborCost         Float           @default(0)
-  overheadCost      Float           @default(0)
-  totalCost         Float           @default(0)
-  cashboxId         String?
-  laborPaymentCategory    String    @default("wages")
-  overheadPaymentCategory String    @default("production_cost")
-  status            String          @default("in_progress")
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  tenantId          String
-  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id])
-  tenant            Tenant          @relation(fields: [tenantId], references: [id])
+  id                      String          @id @default(cuid())
+  productionOrderId       String          @unique
+  rawMaterialCost         Float           @default(0)
+  laborCost               Float           @default(0)
+  overheadCost            Float           @default(0)
+  totalCost               Float           @default(0)
+  cashboxId               String?
+  laborPaymentCategory    String          @default("wages")
+  overheadPaymentCategory String          @default("production_cost")
+  status                  String          @default("in_progress")
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  tenantId                String
+  productionOrder         ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  tenant                  Tenant          @relation(fields: [tenantId], references: [id])
 
   @@index([tenantId])
   @@index([cashboxId])
@@ -1626,6 +1635,34 @@ model PaymentAllocation {
   @@index([invoiceId])
   @@index([invoiceType])
   @@index([tenantId])
+}
+
+model PartyDebtTransaction {
+  id              String    @id @default(cuid())
+  partyType       String
+  customerId      String?
+  supplierId      String?
+  transactionType String
+  amount          Float
+  date            DateTime  @default(now())
+  cashboxId       String?
+  notes           String?
+  journalEntryId  String?
+  createdBy       String?
+  tenantId        String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  customer        Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  supplier        Supplier? @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([partyType])
+  @@index([customerId])
+  @@index([supplierId])
+  @@index([transactionType])
+  @@index([date])
+  @@index([cashboxId])
 }
 
 model OutboxEvent {

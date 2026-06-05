@@ -24,8 +24,16 @@ export async function GET(request: Request) {
       return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
-    const expenses = await expenseRepo.listByTenant(user.tenantId);
-    return apiSuccess(expenses, 'Expenses fetched successfully');
+    const expenses = await prisma.expense.findMany({
+      where: { tenantId: user.tenantId },
+      include: { cashbox: { select: { id: true, code: true, name: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    const rows = expenses.map((expense: any) => ({
+      ...expense,
+      paymentMethod: expense.cashbox ? `خزنة - ${expense.cashbox.name}` : 'غير محدد',
+    }));
+    return apiSuccess(rows, 'Expenses fetched successfully');
   } catch (error) {
     return handleApiError(error, 'Fetch expenses');
   }

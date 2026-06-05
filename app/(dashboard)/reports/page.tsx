@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 import {
   TrendingUp, ShoppingCart, Package, BookOpen, Users, Truck,
-  Clock, Receipt, Factory, ChevronLeft, BarChart3, TriangleAlert,
+  Clock, Receipt, Factory, ChevronLeft, BarChart3, TriangleAlert, WalletCards,
 } from 'lucide-react';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import { useAuthStore } from '@/lib/store/auth';
@@ -70,6 +70,12 @@ const REPORTS = [
     href: '/reports/balance-sheet', title: 'الميزانية العمومية',
     description: 'الأصول والخصوم وحقوق الملكية في تاريخ معين',
     icon: BarChart3, accent: 'bg-teal-50 text-teal-600',
+  },
+  {
+    key: 'cashbox-print',
+    href: '/reports/cashbox-print', title: 'طباعة الخزنة',
+    description: 'حركة الخزنة والداخل والخارج والرصيد النهائي',
+    icon: WalletCards, accent: 'bg-slate-100 text-slate-700',
   },
   {
     key: 'manufacturing',

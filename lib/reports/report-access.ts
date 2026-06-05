@@ -12,6 +12,7 @@ export type ReportKey =
   | 'aging'
   | 'profit-loss'
   | 'balance-sheet'
+  | 'cashbox-print'
   | 'manufacturing';
 
 export type ReportTab = {
@@ -34,6 +35,7 @@ export const REPORT_TABS: ReportTab[] = [
   { key: 'aging', href: '/reports/aging', title: 'الأعمار' },
   { key: 'profit-loss', href: '/reports/profit-loss', title: 'قائمة الدخل' },
   { key: 'balance-sheet', href: '/reports/balance-sheet', title: 'الميزانية' },
+  { key: 'cashbox-print', href: '/reports/cashbox-print', title: 'طباعة الخزنة' },
   { key: 'manufacturing', href: '/reports/manufacturing', title: 'التصنيع' },
 ];
 
@@ -51,6 +53,7 @@ const REPORT_PERMISSIONS: Record<ReportKey, string[]> = {
   aging: ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access'],
   'profit-loss': ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access'],
   'balance-sheet': ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access'],
+  'cashbox-print': ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access'],
   manufacturing: ['reports_full_access', 'production_full_access', 'read_production_order', 'view_accounting'],
 };
 

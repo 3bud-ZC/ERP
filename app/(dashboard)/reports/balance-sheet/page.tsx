@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '@/lib/api/fetcher';
+import Link from 'next/link';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import {
   ReportShell, ReportLabel, reportInputCls, fmtMoneyEGP, ReportSummaryCard,
@@ -43,6 +44,7 @@ export default function BalanceSheetPage() {
         subtitle="الأصول = الخصوم + حقوق الملكية"
         periodLabel={`بتاريخ ${new Date(asOf).toLocaleDateString('ar-EG')}`}
         exportConfig={{ report: 'balance-sheet', params: { asOfDate: asOf } }}
+        extraActions={<Link href={`/accounting/balance-sheet?asOfDate=${asOf}`} className="px-3 py-2 neo-raised text-slate-700 rounded-lg hover:text-indigo-700 text-sm font-medium">فتح في المحاسبة</Link>}
         loading={reportQ.isLoading}
         error={reportQ.error ? (reportQ.error as Error).message : null}
         filters={

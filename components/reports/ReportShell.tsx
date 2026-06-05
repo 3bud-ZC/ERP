@@ -107,14 +107,21 @@ export function ReportShell({
           <meta charset="utf-8" />
           <title>${title}</title>
           <style>
-            @page { margin: 12mm; }
-            body { font-family: Arial, Tahoma, sans-serif; color: #0f172a; direction: rtl; }
+            @page { margin: 12mm; size: A4; }
+            body { font-family: Arial, Tahoma, sans-serif; color: #0f172a; direction: rtl; background: #fff; }
             .print-only-header { border-bottom: 2px solid #cbd5e1; padding-bottom: 10px; margin-bottom: 16px; display: flex; justify-content: space-between; gap: 16px; }
             .muted { color: #64748b; font-size: 12px; }
             h1 { font-size: 20px; margin: 4px 0; }
-            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            h2, h3 { break-after: avoid; page-break-after: avoid; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; page-break-inside: auto; }
+            thead { display: table-header-group; }
+            tfoot { display: table-footer-group; }
+            tr { break-inside: avoid; page-break-inside: avoid; }
             th, td { border: 1px solid #e2e8f0; padding: 7px 8px; text-align: right; }
             th { background: #f1f5f9; font-weight: 700; }
+            .rounded-2xl, .rounded-xl, .rounded-lg, .rounded-\\[10px\\] { border-radius: 0 !important; }
+            .grid { display: block !important; }
+            .grid > * { margin-bottom: 10px; }
             .no-print, button, input, select, textarea { display: none !important; }
             * { box-shadow: none !important; }
           </style>

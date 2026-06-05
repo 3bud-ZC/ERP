@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { Truck } from 'lucide-react';
 import { useToast, Toast } from '@/components/ui/patterns';
-import { Field, Section, FieldGrid } from '@/components/ui/modal';
+import { Field, Section, FieldGrid, SelectField } from '@/components/ui/modal';
 import { EntityFormPage } from '@/components/forms/EntityFormPage';
 import { AutoCodeField } from '@/components/forms/AutoCodeField';
 import { queryKeys } from '@/lib/api/query-keys';
@@ -18,9 +18,12 @@ export interface SupplierExisting {
   email?:       string | null;
   phone?:       string | null;
   creditLimit?: number | null;
+  openingBalanceType?: string | null;
+  openingBalanceAmount?: number | null;
+  openingBalanceDate?: string | null;
 }
 
-const empty = { nameAr: '', nameEn: '', email: '', phone: '', creditLimit: '' };
+const empty = { nameAr: '', nameEn: '', email: '', phone: '', creditLimit: '', openingBalanceType: '', openingBalanceAmount: '', openingBalanceDate: new Date().toISOString().slice(0, 10) };
 
 export function SupplierForm({
   mode,
@@ -41,6 +44,9 @@ export function SupplierForm({
           email:       existing.email ?? '',
           phone:       existing.phone ?? '',
           creditLimit: existing.creditLimit != null ? String(existing.creditLimit) : '',
+          openingBalanceType: existing.openingBalanceType ?? '',
+          openingBalanceAmount: existing.openingBalanceAmount != null ? String(existing.openingBalanceAmount) : '',
+          openingBalanceDate: existing.openingBalanceDate ? new Date(existing.openingBalanceDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
         }
       : empty,
   );
@@ -63,6 +69,9 @@ export function SupplierForm({
               ...(form.email       && { email:       form.email.trim() }),
               ...(form.phone       && { phone:       form.phone.trim() }),
               ...(form.creditLimit && { creditLimit: Number(form.creditLimit) }),
+              ...(form.openingBalanceType && { openingBalanceType: form.openingBalanceType }),
+              ...(form.openingBalanceAmount && { openingBalanceAmount: Number(form.openingBalanceAmount) }),
+              ...(form.openingBalanceAmount && { openingBalanceDate: form.openingBalanceDate }),
             }
           : {
               id:          existing!.id,
@@ -71,6 +80,9 @@ export function SupplierForm({
               email:       form.email.trim()  || null,
               phone:       form.phone.trim()  || null,
               creditLimit: form.creditLimit ? Number(form.creditLimit) : null,
+              openingBalanceType: form.openingBalanceType || null,
+              openingBalanceAmount: form.openingBalanceAmount ? Number(form.openingBalanceAmount) : 0,
+              openingBalanceDate: form.openingBalanceAmount ? form.openingBalanceDate : null,
             };
 
       const res = await fetch('/api/suppliers', {
@@ -133,6 +145,35 @@ export function SupplierForm({
                 onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
               <Field label="البريد الإلكتروني" type="email" value={form.email} placeholder="info@supplier.com"
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+            </FieldGrid>
+          </Section>
+
+          <Section title="الرصيد الافتتاحي" subtitle="اختياري، ويتم ترحيله محاسبيًا عند الحفظ">
+            <FieldGrid>
+              <SelectField
+                label="نوع الرصيد"
+                value={form.openingBalanceType}
+                onChange={e => setForm(f => ({ ...f, openingBalanceType: e.target.value }))}
+              >
+                <option value="">بدون رصيد افتتاحي</option>
+                <option value="we_owe_supplier">مستحق للمورد</option>
+                <option value="supplier_owes_us">مستحق لنا عند المورد</option>
+              </SelectField>
+              <Field
+                label="قيمة الرصيد (ج.م)"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.openingBalanceAmount}
+                placeholder="0"
+                onChange={e => setForm(f => ({ ...f, openingBalanceAmount: e.target.value }))}
+              />
+              <Field
+                label="تاريخ الرصيد"
+                type="date"
+                value={form.openingBalanceDate}
+                onChange={e => setForm(f => ({ ...f, openingBalanceDate: e.target.value }))}
+              />
             </FieldGrid>
           </Section>
         </form>

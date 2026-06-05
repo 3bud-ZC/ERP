@@ -101,6 +101,7 @@ const navItems: NavItem[] = [
       { title: 'الخزن',               href: '/accounting/treasury' },
       // تم دمج (الخزن + الحركات + التحليلات) داخل صفحة الخزنة نفسها لتقليل التشتيت.
       { title: 'المدفوعات',           href: '/accounting/payments' },
+      { title: 'الميزانية العمومية',  href: '/accounting/balance-sheet' },
       { title: 'ميزان المراجعة',      href: '/accounting/trial-balance' },
       // ملاحظة: صفحات المحاسبة المتقدمة (قيود/دليل حسابات/ميزان مراجعة...)
       // ما زالت موجودة كـ routes لكن تم إخفاؤها من قائمة "المحاسبة" لتبسيط الواجهة.
@@ -125,6 +126,7 @@ const navItems: NavItem[] = [
       { title: 'تقرير الأعمار',     href: '/reports/aging' },
       { title: 'قائمة الدخل',         href: '/reports/profit-loss' },
       { title: 'الميزانية العمومية', href: '/reports/balance-sheet' },
+      { title: 'طباعة الخزنة',       href: '/reports/cashbox-print' },
       { title: 'تقرير التصنيع',    href: '/reports/manufacturing' },
     ],
   },

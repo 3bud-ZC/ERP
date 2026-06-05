@@ -7,6 +7,7 @@ import { apiError, handleApiError } from '@/lib/api-response';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { hasReportAccess, type ReportKey } from '@/lib/reports/report-access';
 import { buildWasteReportData, type WasteReportSource } from '@/lib/reports/waste-report';
+import { buildBalanceSheetData } from '@/lib/reports/balance-sheet';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -30,6 +31,7 @@ const REPORT_KEYS = new Set<ReportKey>([
   'aging',
   'profit-loss',
   'balance-sheet',
+  'cashbox-print',
   'manufacturing',
 ]);
 
@@ -82,6 +84,8 @@ async function buildDataset(report: ReportKey, tenantId: string, params: URLSear
       return buildProfitLossDataset(tenantId, params);
     case 'balance-sheet':
       return buildBalanceSheetDataset(tenantId, params);
+    case 'cashbox-print':
+      return buildCashboxPrintDataset(tenantId, params);
     case 'manufacturing':
       return buildManufacturingDataset(tenantId, params);
     default:
@@ -247,6 +251,7 @@ async function buildExpensesDataset(tenantId: string, params: URLSearchParams): 
       amount: true,
       description: true,
       cashboxId: true,
+      cashbox: { select: { name: true } },
     },
     orderBy: { date: 'desc' },
   });
@@ -257,7 +262,7 @@ async function buildExpensesDataset(tenantId: string, params: URLSearchParams): 
     rows: expenses.map((expense) => [
       toArDate(expense.date),
       expense.category || '-',
-      expense.cashboxId ? 'مرتبط بخزنة' : 'غير محدد',
+      expense.cashbox ? `خزنة - ${expense.cashbox.name}` : (expense.cashboxId ? 'مرتبط بخزنة' : 'غير محدد'),
       Number(expense.amount || 0),
       expense.description || '-',
     ]),
@@ -585,34 +590,60 @@ async function buildProfitLossDataset(tenantId: string, params: URLSearchParams)
 
 async function buildBalanceSheetDataset(tenantId: string, params: URLSearchParams): Promise<ReportDataset> {
   const asOfDate = endOfDay(parseDate(params.get('asOfDate')));
-  const accounts = await prisma.account.findMany({
-    where: { tenantId, isActive: true },
-    select: { code: true, nameAr: true, type: true },
-  });
-  const lineTotals = await prisma.journalEntryLine.groupBy({
-    by: ['accountCode'],
-    where: {
-      tenantId,
-      journalEntry: {
-        tenantId,
-        isPosted: true,
-        entryDate: { lte: asOfDate },
-      },
-    },
-    _sum: { debit: true, credit: true },
-  });
-  const totalsMap = new Map(lineTotals.map((line) => [line.accountCode, { debit: Number(line._sum.debit || 0), credit: Number(line._sum.credit || 0) }]));
-
-  const rows = accounts.map((account) => {
-    const totals = totalsMap.get(account.code) || { debit: 0, credit: 0 };
-    const amount = account.type === 'Asset' ? totals.debit - totals.credit : totals.credit - totals.debit;
-    return [account.type, account.code, account.nameAr, amount];
-  });
+  const data = await buildBalanceSheetData(tenantId, asOfDate);
+  const rows: Array<Array<string | number>> = [
+    ...data.assets.lines.map((line) => ['الأصول', line.code, line.nameAr, line.amount]),
+    ...data.liabilities.lines.map((line) => ['الخصوم', line.code, line.nameAr, line.amount]),
+    ...data.equity.lines.map((line) => ['حقوق الملكية', line.code, line.nameAr, line.amount]),
+    ['حقوق الملكية', 'NI', 'صافي الربح للفترة', data.equity.netIncome],
+    ['', '', 'إجمالي الأصول', data.summary.totalAssets],
+    ['', '', 'إجمالي الخصوم + حقوق الملكية', data.summary.totalLiabilitiesAndEquity],
+    ['', '', 'الفرق', data.summary.difference],
+  ];
 
   return {
     title: 'الميزانية العمومية',
     columns: ['النوع', 'الكود', 'الحساب', 'الرصيد'],
     rows,
+  };
+}
+
+async function buildCashboxPrintDataset(tenantId: string, params: URLSearchParams): Promise<ReportDataset> {
+  const fromDate = parseDate(params.get('fromDate'));
+  const toDate = endOfDay(parseDate(params.get('toDate')));
+  const cashboxId = params.get('cashboxId');
+
+  const cashboxes = await (prisma as any).cashbox.findMany({
+    where: { tenantId, ...(cashboxId ? { id: cashboxId } : {}) },
+    select: { id: true, openingBalance: true },
+  });
+  const cashboxIds = cashboxes.map((c: any) => c.id);
+  const rows = await (prisma as any).cashboxTransaction.findMany({
+    where: { tenantId, cashboxId: { in: cashboxIds }, date: { gte: fromDate, lte: toDate } },
+    include: { cashbox: { select: { code: true, name: true } } },
+    orderBy: { date: 'asc' },
+  });
+
+  const totalIn = rows.filter((r: any) => r.direction === 'in').reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+  const totalOut = rows.filter((r: any) => r.direction === 'out').reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+
+  return {
+    title: 'طباعة الخزنة',
+    columns: ['التاريخ', 'الخزنة', 'نوع العملية', 'طريقة الدفع', 'داخل', 'خارج', 'الرصيد بعد العملية', 'ملاحظات'],
+    rows: [
+      ...rows.map((row: any) => [
+        toArDate(row.date),
+        `${row.cashbox?.name || '-'} (${row.cashbox?.code || '-'})`,
+        row.type,
+        'خزنة',
+        row.direction === 'in' ? Number(row.amount || 0) : 0,
+        row.direction === 'out' ? Number(row.amount || 0) : 0,
+        Number(row.afterBalance || 0),
+        row.description || row.referenceType || '—',
+      ]),
+      ['', '', '', 'إجمالي الداخل', totalIn, '', '', ''],
+      ['', '', '', 'إجمالي الخارج', '', totalOut, '', ''],
+    ],
   };
 }
 

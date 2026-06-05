@@ -6,6 +6,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { logAuditAction, getAuthenticatedUser, checkPermission } from '@/lib/auth';
+import { listSupplierBalances, setPartyOpeningBalance } from '@/lib/services/party-debt.service';
 
 // GET - Read suppliers
 export async function GET(request: Request) {
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
       return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
     }
 
-    const suppliers = await supplierRepo.listByTenant(user.tenantId);
+    const suppliers = await listSupplierBalances(user.tenantId);
     return apiSuccess(suppliers, 'Suppliers fetched successfully');
   } catch (error) {
     return handleApiError(error, 'Fetch suppliers');
@@ -62,6 +63,16 @@ export async function POST(request: Request) {
       tenantId: user.tenantId,
     });
 
+    await setPartyOpeningBalance({
+      tenantId: user.tenantId,
+      userId: user.id,
+      partyType: 'supplier',
+      partyId: supplier.id,
+      openingBalanceType: supplierData.openingBalanceType,
+      openingBalanceAmount: supplierData.openingBalanceAmount,
+      openingBalanceDate: supplierData.openingBalanceDate,
+    });
+
     await logAuditAction(
       user.id,
       'CREATE',
@@ -100,8 +111,24 @@ export async function PUT(request: Request) {
       return apiError('المورد غير موجود', 404);
     }
 
-    const { code: _c, ...safeData } = data as Record<string, unknown>;
+    const {
+      code: _c,
+      openingBalanceType,
+      openingBalanceAmount,
+      openingBalanceDate,
+      ...safeData
+    } = data as Record<string, unknown>;
     const supplier = await supplierRepo.update(id, safeData);
+
+    await setPartyOpeningBalance({
+      tenantId: user.tenantId!,
+      userId: user.id,
+      partyType: 'supplier',
+      partyId: id,
+      openingBalanceType: openingBalanceType as string | undefined,
+      openingBalanceAmount: openingBalanceAmount as number | undefined,
+      openingBalanceDate: openingBalanceDate as string | undefined,
+    });
 
     await logAuditAction(
       user.id,

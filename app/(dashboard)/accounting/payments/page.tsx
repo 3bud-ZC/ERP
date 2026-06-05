@@ -221,6 +221,9 @@ export default function PaymentsPage() {
         direction: 'out',
         amount,
         date: manualForm.date,
+        category,
+        reason,
+        reference,
         description,
       });
 
