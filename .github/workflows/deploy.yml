@@ -134,12 +134,16 @@ jobs:
             . ./.env
             set +a
             export PM2_APP="$PM2_APP"
+            export APP_ROOT="$APP_ROOT"
+            export APP_CWD="$APP_ROOT/current"
+            export PM2_LOG_DIR="$APP_ROOT/logs"
+            mkdir -p "$PM2_LOG_DIR"
 
             if pm2 describe "$PM2_APP" >/dev/null 2>&1; then
               pm2 delete "$PM2_APP"
             fi
 
-            pm2 start deployment/ecosystem.config.js --env production
+            pm2 start deployment/ecosystem.config.js --env production --update-env
             pm2 save
 
             HEALTH_PORT="${PORT:-3000}"
