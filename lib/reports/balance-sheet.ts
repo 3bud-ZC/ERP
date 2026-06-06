@@ -35,10 +35,10 @@ export interface BalanceSheetData {
     liabilities: BalanceSheetSection;
     equity: BalanceSheetSection;
   };
-  assets: {
-    lines: BalanceSheetRow[];
-    total: number;
-    groups: Record<string, number>;
+    assets: {
+      lines: BalanceSheetRow[];
+      total: number;
+      groups: Record<string, number>;
   };
   liabilities: {
     lines: BalanceSheetRow[];
@@ -414,10 +414,7 @@ export async function buildBalanceSheetData(tenantId: string, asOfDate: Date): P
     assets: {
       lines: assetLines,
       total: totalAssets,
-      groups: fixedAssetsSection.rows.reduce<Record<string, number>>((acc, row) => {
-        acc[row.label] = row.amount;
-        return acc;
-      }, {}),
+      groups: summarizeFixedAssetGroups(fixedAssets, date),
     },
     liabilities: {
       lines: liabilityLines,
@@ -462,27 +459,17 @@ function buildFixedAssetsSection(
   asOfDate: Date,
   assetLines: BalanceSheetRow[],
 ): BalanceSheetSection {
-  const bucket = new Map(FIXED_ASSET_GROUPS.map((group) => [group.key, 0]));
-  const details = new Map(FIXED_ASSET_GROUPS.map((group) => [group.key, [] as string[]]));
-
-  for (const asset of fixedAssets) {
+  const rows = fixedAssets.map((asset) => {
     const amount = resolveFixedAssetAmount(asset, asOfDate);
     const group = classifyFixedAsset(asset.name, asset.description);
-    bucket.set(group.key, (bucket.get(group.key) || 0) + amount);
-    details.get(group.key)?.push(`${asset.name} (${asset.assetNumber})`);
-  }
-
-  const rows = FIXED_ASSET_GROUPS.map((group) => {
-    const amount = roundMoney(bucket.get(group.key) || 0);
-    const names = details.get(group.key) || [];
     const row = buildRow(
-      `FA-${group.key}`,
-      group.label,
+      `FA-${asset.id}`,
+      asset.name,
       amount,
       'FixedAsset',
       'asset',
       'asset',
-      names.length ? `${names.length} أصل` : '—',
+      `${group.label} • ${asset.assetNumber}`,
     );
     if (amount > 0) assetLines.push(row);
     return row;
@@ -492,9 +479,32 @@ function buildFixedAssetsSection(
     key: 'fixedAssets',
     title: 'الأصول الثابتة',
     total: sumRows(rows),
-    note: 'القيمة الدفترية الصافية حسب بطاقة الأصل وسجلات الإهلاك عند توفرها',
+    note: 'كل أصل يظهر باسمه والقيمة الدفترية الصافية حسب بطاقة الأصل وسجلات الإهلاك عند توفرها',
     rows,
   };
+}
+
+function summarizeFixedAssetGroups(
+  fixedAssets: Array<{
+    id: string;
+    assetNumber: string;
+    name: string;
+    description: string | null;
+    purchaseDate: Date;
+    netBookValue: number;
+    status: string;
+    disposedAt: Date | null;
+    depreciationSchedules: Array<{ period: string; netBookValue: number }>;
+  }>,
+  asOfDate: Date,
+) {
+  const bucket = new Map(FIXED_ASSET_GROUPS.map((group) => [group.label, 0]));
+  for (const asset of fixedAssets) {
+    const amount = resolveFixedAssetAmount(asset, asOfDate);
+    const group = classifyFixedAsset(asset.name, asset.description);
+    bucket.set(group.label, roundMoney((bucket.get(group.label) || 0) + amount));
+  }
+  return Object.fromEntries(bucket.entries());
 }
 
 function buildTreasurySection(

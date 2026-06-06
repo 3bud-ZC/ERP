@@ -7,6 +7,7 @@ import { apiGet } from '@/lib/api/fetcher';
 import { AccountingLayout } from '@/components/accounting/AccountingLayout';
 import { AccountingQuickNav } from '@/components/accounting/AccountingQuickNav';
 import { BalanceSheetView } from '@/components/accounting/BalanceSheetView';
+import { CapitalContributionsPanel } from '@/components/accounting/CapitalContributionsPanel';
 import { FixedAssetsPanel } from '@/components/accounting/FixedAssetsPanel';
 import type { BalanceSheetData } from '@/lib/reports/balance-sheet';
 
@@ -52,6 +53,7 @@ export default function AccountingBalanceSheetPage() {
     >
       <div className="text-xs text-slate-500" dir="rtl">المحاسبة &gt; الميزانية العمومية</div>
 
+      <CapitalContributionsPanel onChanged={() => q.refetch()} />
       <FixedAssetsPanel onCreated={() => q.refetch()} />
 
       {q.error ? (
