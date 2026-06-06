@@ -11,6 +11,7 @@ import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import { apiSuccess, apiError, handleApiError } from '@/lib/api-response';
+import { seedChartOfAccounts } from '@/lib/accounting';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -32,7 +33,7 @@ export async function GET(req: NextRequest) {
     const mode = searchParams.get('mode');
     const activeOnly = searchParams.get('activeOnly') !== '0';
 
-    const accounts = await prisma.account.findMany({
+    let accounts = await prisma.account.findMany({
       where: {
         tenantId: user.tenantId,
         ...(activeOnly ? { isActive: true } : {}),
@@ -48,6 +49,26 @@ export async function GET(req: NextRequest) {
       },
       orderBy: { code: 'asc' },
     });
+
+    if (accounts.length === 0) {
+      await seedChartOfAccounts(user.tenantId);
+      accounts = await prisma.account.findMany({
+        where: {
+          tenantId: user.tenantId,
+          ...(activeOnly ? { isActive: true } : {}),
+        },
+        select: {
+          id: true,
+          code: true,
+          nameAr: true,
+          nameEn: true,
+          type: true,
+          subType: true,
+          isActive: true,
+        },
+        orderBy: { code: 'asc' },
+      });
+    }
 
     if (mode === 'picker') {
       return apiSuccess(accounts, `Accounts fetched for picker (${accounts.length})`);

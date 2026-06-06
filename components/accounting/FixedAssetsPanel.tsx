@@ -84,24 +84,39 @@ export function FixedAssetsPanel({
   const assetsQuery = useFixedAssetsQuery();
   const accountsQuery = useAccountsQuery();
 
-  const assetAccounts = useMemo(() => {
+  const allAssetAccounts = useMemo(() => {
     return (accountsQuery.data ?? []).filter((account) => {
       const type = String(account.type || '').toLowerCase();
       const subtype = String(account.subType || '').toLowerCase();
+      return type === 'asset' && subtype !== 'header';
+    });
+  }, [accountsQuery.data]);
+
+  const assetAccounts = useMemo(() => {
+    const narrowed = allAssetAccounts.filter((account) => {
+      const subtype = String(account.subType || '').toLowerCase();
       const name = String(account.nameAr || '').toLowerCase();
-      return type === 'asset' && (
+      return (
         subtype.includes('fixed') ||
         name.includes('أصل') ||
         account.code.startsWith('14') ||
         account.code.startsWith('104')
       );
     });
+
+    if (narrowed.length > 0) return narrowed;
+
+    return allAssetAccounts.filter((account) => {
+      const subtype = String(account.subType || '').toLowerCase();
+      return !['cash', 'bank', 'receivable', 'inventory', 'wip'].includes(subtype);
+    });
   }, [accountsQuery.data]);
 
   const fundingAccounts = useMemo(() => {
     return (accountsQuery.data ?? []).filter((account) => {
       const type = String(account.type || '').toLowerCase();
-      return ['asset', 'liability', 'equity'].includes(type);
+      const subtype = String(account.subType || '').toLowerCase();
+      return ['asset', 'liability', 'equity'].includes(type) && subtype !== 'header';
     });
   }, [accountsQuery.data]);
 
@@ -116,7 +131,7 @@ export function FixedAssetsPanel({
   }, [assetsQuery.data]);
 
   const categoryPlaceholder = CATEGORY_OPTIONS.find((item) => item.value === form.category)?.placeholder ?? '';
-  const canCreateAsset = assetAccounts.length > 0 && fundingAccounts.length > 0;
+  const canCreateAsset = !accountsQuery.isLoading && assetAccounts.length > 0 && fundingAccounts.length > 0;
 
   function openCreateModal() {
     const defaultAssetAccount =
@@ -204,7 +219,7 @@ export function FixedAssetsPanel({
               type="button"
               onClick={openCreateModal}
               className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
-              disabled={!canCreateAsset || accountsQuery.isLoading}
+              disabled={accountsQuery.isLoading}
             >
               <Plus className="h-4 w-4" />
               إضافة أصل ثابت
@@ -212,9 +227,21 @@ export function FixedAssetsPanel({
           </div>
         </div>
 
+        {accountsQuery.error && (
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {(accountsQuery.error as Error).message}
+          </div>
+        )}
+
         {!canCreateAsset && !accountsQuery.isLoading && (
           <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
             لا توجد حسابات مناسبة للأصول الثابتة أو الحساب المقابل. راجع دليل الحسابات أولًا ثم أعد المحاولة.
+          </div>
+        )}
+
+        {canCreateAsset && assetAccounts.length > 0 && !assetAccounts.some((account) => String(account.subType || '').toLowerCase().includes('fixed')) && (
+          <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+            لم يتم العثور على حساب أصول ثابتة مخصص، لذلك يعرض النظام أقرب حسابات أصول متاحة لتتمكن من التسجيل بدون تعطيل.
           </div>
         )}
 
