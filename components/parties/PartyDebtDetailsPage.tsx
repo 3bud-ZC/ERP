@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { ArrowDownCircle, ArrowUpCircle, FileText, Wallet } from 'lucide-react';
+import { ArrowDownCircle, ArrowUpCircle, Building2, FileText, Landmark, Wallet } from 'lucide-react';
 import { apiGet, apiGetList, apiPost } from '@/lib/api/fetcher';
 import { Modal, Field, SelectField, TextAreaField } from '@/components/ui/modal';
 import { Toast, useToast } from '@/components/ui/patterns';
@@ -18,6 +18,14 @@ interface Cashbox {
   code: string;
   name: string;
   currentBalance: number;
+}
+
+interface AccountOption {
+  id: string;
+  code: string;
+  nameAr: string;
+  type: string;
+  subType?: string | null;
 }
 
 interface LedgerRow {
@@ -76,20 +84,36 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
   });
 
   const [form, setForm] = useState({
+    settlementSource: 'cashbox',
     cashboxId: '',
+    settlementAccountCode: '1010',
     amount: '',
     date: new Date().toISOString().slice(0, 10),
     notes: '',
   });
 
   const cashboxes = cashboxesQ.data ?? [];
+  const accountsQ = useQuery({
+    queryKey: ['accounting-accounts', 'party-debt-picker'],
+    queryFn: () => apiGetList<AccountOption>('/api/accounting/accounts?mode=picker&activeOnly=1'),
+    staleTime: 60_000,
+  });
+  const bankAccounts = (accountsQ.data ?? []).filter((account) => {
+    const type = String(account.type || '').toLowerCase();
+    const subtype = String(account.subType || '').toLowerCase();
+    return type === 'asset' && (subtype.includes('bank') || account.code === '1010');
+  });
   const data = debtQ.data;
   const actionType = isCustomer ? 'customer_collection' : 'supplier_payment';
   const actionLabel = isCustomer ? 'تحصيل من العميل' : 'سداد للمورد';
+  const canRunAction = isCustomer
+    ? Number(data?.summary.currentBalance || 0) > 0.01
+    : Number(data?.summary.currentBalance || 0) > 0.01;
 
   async function submit() {
     const amount = Number(form.amount);
-    if (!form.cashboxId) return showToast('يجب اختيار الخزنة', 'error');
+    if (form.settlementSource === 'cashbox' && !form.cashboxId) return showToast('يجب اختيار الخزنة', 'error');
+    if (form.settlementSource === 'bank' && !form.settlementAccountCode) return showToast('يجب اختيار الحساب البنكي', 'error');
     if (!Number.isFinite(amount) || amount <= 0) return showToast('المبلغ يجب أن يكون أكبر من صفر', 'error');
 
     setSaving(true);
@@ -98,17 +122,21 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
         partyType,
         partyId,
         transactionType: actionType,
-        cashboxId: form.cashboxId,
+        settlementSource: form.settlementSource,
+        cashboxId: form.settlementSource === 'cashbox' ? form.cashboxId : undefined,
+        settlementAccountCode: form.settlementSource === 'bank' ? form.settlementAccountCode : undefined,
         amount,
         date: form.date,
         notes: form.notes,
       });
       showToast('تم تسجيل الحركة بنجاح', 'success');
       setOpen(false);
-      setForm({ cashboxId: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
+      setForm({ settlementSource: 'cashbox', cashboxId: '', settlementAccountCode: '1010', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey }),
         queryClient.invalidateQueries({ queryKey: ['cashboxes'] }),
+        queryClient.invalidateQueries({ queryKey: ['accounting', 'balance-sheet'] }),
+        queryClient.invalidateQueries({ queryKey: ['accounting', 'trial-balance'] }),
       ]);
     } catch (error: any) {
       showToast(error?.message || 'تعذر تسجيل الحركة', 'error');
@@ -121,11 +149,15 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
     <ServicesLayout
       title={isCustomer ? 'تفاصيل العميل' : 'تفاصيل المورد'}
       subtitle={data?.party?.nameAr || 'جاري التحميل…'}
-      toolbar={(
+      toolbar={canRunAction ? (
         <button
           type="button"
           onClick={() => {
-            setForm((f) => ({ ...f, cashboxId: f.cashboxId || (cashboxes[0]?.id ?? '') }));
+            setForm((f) => ({
+              ...f,
+              cashboxId: f.cashboxId || (cashboxes[0]?.id ?? ''),
+              settlementAccountCode: f.settlementAccountCode || (bankAccounts[0]?.code ?? '1010'),
+            }));
             setOpen(true);
           }}
           className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-900"
@@ -133,7 +165,7 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
           {isCustomer ? <ArrowDownCircle className="h-4 w-4" /> : <ArrowUpCircle className="h-4 w-4" />}
           {actionLabel}
         </button>
-      )}
+      ) : null}
     >
       <Toast toast={toast} />
       {debtQ.error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{(debtQ.error as Error).message}</div>}
@@ -166,6 +198,12 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
               <Info label="الكود" value={data.party.code} />
               <Info label="الهاتف" value={data.party.phone || '—'} />
               <Info label="البريد الإلكتروني" value={data.party.email || '—'} />
+            </div>
+            <div className="mt-4 grid gap-3 text-sm sm:grid-cols-4">
+              <Info label="الرصيد الأصلي" value={fmtMoneyEGP(data.summary.openingBalance)} />
+              <Info label={isCustomer ? 'المحصل / المسدد' : 'المحصل / المسدد'} value={fmtMoneyEGP(data.summary.invoicePaid + (data.summary.directCollections || data.summary.directPayments || 0))} />
+              <Info label="المتبقي" value={fmtMoneyEGP(data.summary.currentBalance)} />
+              <Info label="الحالة المالية" value={data.summary.status} />
             </div>
           </div>
 
@@ -218,12 +256,33 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
         )}
       >
         <div className="grid gap-4 sm:grid-cols-2">
-          <SelectField label="الخزنة" required value={form.cashboxId} onChange={(e) => setForm((f) => ({ ...f, cashboxId: e.target.value }))}>
-            <option value="">اختر الخزنة</option>
-            {cashboxes.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
+          <SelectField label="وسيلة التسوية" required value={form.settlementSource} onChange={(e) => setForm((f) => ({ ...f, settlementSource: e.target.value, cashboxId: '', settlementAccountCode: f.settlementAccountCode || '1010' }))}>
+            <option value="cashbox">خزنة</option>
+            <option value="bank">بنك</option>
           </SelectField>
+          {form.settlementSource === 'cashbox' ? (
+            <SelectField label="الخزنة" required value={form.cashboxId} onChange={(e) => setForm((f) => ({ ...f, cashboxId: e.target.value }))}>
+              <option value="">اختر الخزنة</option>
+              {cashboxes.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
+            </SelectField>
+          ) : (
+            <SelectField label="الحساب البنكي" required value={form.settlementAccountCode} onChange={(e) => setForm((f) => ({ ...f, settlementAccountCode: e.target.value }))}>
+              <option value="">اختر الحساب البنكي</option>
+              {bankAccounts.map((account) => <option key={account.id} value={account.code}>{account.code} - {account.nameAr}</option>)}
+            </SelectField>
+          )}
           <Field label="المبلغ" required type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} />
           <Field label="التاريخ" required type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+          <div className="sm:col-span-2">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              <div className="font-semibold text-slate-900">التأثير المحاسبي</div>
+              <div className="mt-1">
+                {isCustomer
+                  ? `من حـ/ ${form.settlementSource === 'bank' ? 'البنك' : 'الخزنة'} إلى حـ/ العملاء`
+                  : `من حـ/ الموردين إلى حـ/ ${form.settlementSource === 'bank' ? 'البنك' : 'الخزنة'}`}
+              </div>
+            </div>
+          </div>
           <div className="sm:col-span-2">
             <TextAreaField label="ملاحظات" rows={3} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
           </div>

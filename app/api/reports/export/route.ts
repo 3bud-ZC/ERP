@@ -28,7 +28,6 @@ const REPORT_KEYS = new Set<ReportKey>([
   'supplier-statement',
   'receivables',
   'payables',
-  'aging',
   'profit-loss',
   'balance-sheet',
   'cashbox-print',
@@ -78,8 +77,6 @@ async function buildDataset(report: ReportKey, tenantId: string, params: URLSear
       return buildReceivablesDataset(tenantId, params);
     case 'payables':
       return buildPayablesDataset(tenantId, params);
-    case 'aging':
-      return buildAgingDataset(tenantId, params);
     case 'profit-loss':
       return buildProfitLossDataset(tenantId, params);
     case 'balance-sheet':
@@ -643,7 +640,7 @@ async function buildCashboxPrintDataset(tenantId: string, params: URLSearchParam
   const totalOut = rows.filter((r: any) => r.direction === 'out').reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
 
   return {
-    title: 'طباعة الخزنة',
+    title: 'تقارير الخزنة',
     columns: ['التاريخ', 'الخزنة', 'نوع العملية', 'طريقة الدفع', 'داخل', 'خارج', 'الرصيد بعد العملية', 'ملاحظات'],
     rows: [
       ...rows.map((row: any) => [

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 import {
   TrendingUp, ShoppingCart, Package, BookOpen, Users, Truck,
-  Clock, Receipt, Factory, ChevronLeft, BarChart3, TriangleAlert, WalletCards,
+  Receipt, Factory, ChevronLeft, BarChart3, TriangleAlert, WalletCards,
 } from 'lucide-react';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import { useAuthStore } from '@/lib/store/auth';
@@ -54,12 +54,6 @@ const REPORTS = [
     icon: Truck, accent: 'bg-cyan-50 text-cyan-700',
   },
   {
-    key: 'aging',
-    href: '/reports/aging', title: 'تقرير الأعمار',
-    description: 'تحليل الذمم حسب فترات الاستحقاق',
-    icon: Clock, accent: 'bg-orange-50 text-orange-600',
-  },
-  {
     key: 'profit-loss',
     href: '/reports/profit-loss', title: 'قائمة الدخل',
     description: 'الإيرادات والمصروفات وصافي الربح للفترة',
@@ -73,7 +67,7 @@ const REPORTS = [
   },
   {
     key: 'cashbox-print',
-    href: '/reports/cashbox-print', title: 'طباعة الخزنة',
+    href: '/reports/cashbox-print', title: 'تقارير الخزنة',
     description: 'حركة الخزنة والداخل والخارج والرصيد النهائي',
     icon: WalletCards, accent: 'bg-slate-100 text-slate-700',
   },

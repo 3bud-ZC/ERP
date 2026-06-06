@@ -9,7 +9,6 @@ export type ReportKey =
   | 'supplier-statement'
   | 'receivables'
   | 'payables'
-  | 'aging'
   | 'profit-loss'
   | 'balance-sheet'
   | 'cashbox-print'
@@ -32,10 +31,9 @@ export const REPORT_TABS: ReportTab[] = [
   { key: 'supplier-statement', href: '/reports/supplier-statement', title: 'كشف مورد' },
   { key: 'receivables', href: '/reports/receivables', title: 'مديونيات العملاء' },
   { key: 'payables', href: '/reports/payables', title: 'مستحقات الموردين' },
-  { key: 'aging', href: '/reports/aging', title: 'الأعمار' },
   { key: 'profit-loss', href: '/reports/profit-loss', title: 'قائمة الدخل' },
   { key: 'balance-sheet', href: '/reports/balance-sheet', title: 'الميزانية' },
-  { key: 'cashbox-print', href: '/reports/cashbox-print', title: 'طباعة الخزنة' },
+  { key: 'cashbox-print', href: '/reports/cashbox-print', title: 'تقارير الخزنة' },
   { key: 'manufacturing', href: '/reports/manufacturing', title: 'التصنيع' },
 ];
 
@@ -50,7 +48,6 @@ const REPORT_PERMISSIONS: Record<ReportKey, string[]> = {
   'supplier-statement': ['reports_full_access', 'view_accounting', 'view_financial_reports', 'accounting_full_access', 'view_purchase'],
   receivables: ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access', 'view_sales_reports'],
   payables: ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access', 'view_purchase'],
-  aging: ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access'],
   'profit-loss': ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access'],
   'balance-sheet': ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access'],
   'cashbox-print': ['reports_full_access', 'view_financial_reports', 'view_accounting', 'accounting_full_access'],

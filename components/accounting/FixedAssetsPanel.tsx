@@ -293,6 +293,12 @@ export function FixedAssetsPanel({
         <form id="fixed-asset-form" className="space-y-5" onSubmit={handleSubmit}>
           <FormError>{formError}</FormError>
 
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <div className="font-semibold text-slate-900">التأثير المحاسبي</div>
+            <div className="mt-1">حساب الأصل يزيد كأصل ثابت، والحساب المقابل هو مصدر التمويل الذي ستخرج منه القيمة.</div>
+            <div className="mt-1 font-medium text-slate-900">القيد الناتج: من حـ/ الأصل إلى حـ/ الحساب المقابل</div>
+          </div>
+
           <FieldGrid cols={2}>
             <SelectField
               label="نوع الأصل"

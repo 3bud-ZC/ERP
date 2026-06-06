@@ -65,9 +65,9 @@ export default function CashboxPrintReportPage() {
   const periodLabel = `من ${new Date(from).toLocaleDateString('ar-EG')} إلى ${new Date(to).toLocaleDateString('ar-EG')}`;
 
   return (
-    <ReportsLayout title="طباعة الخزنة" subtitle="تقرير حركة الخزنة والرصيد خلال فترة محددة">
+    <ReportsLayout title="تقارير الخزنة" subtitle="تقرير حركة الخزنة والرصيد خلال فترة محددة">
       <ReportShell
-        title="طباعة الخزنة"
+        title="تقارير الخزنة"
         subtitle="حركة الخزنة والداخل والخارج والرصيد النهائي"
         periodLabel={periodLabel}
         exportConfig={{ report: 'cashbox-print', params: { fromDate: from, toDate: to, cashboxId } }}

@@ -25,6 +25,12 @@ interface TrialBalanceRow {
   credit: number;
 }
 
+interface TrialBalanceComputedRow extends TrialBalanceRow {
+  balance: number;
+  balanceAbs: number;
+  balanceSide: 'مدين' | 'دائن' | 'متوازن';
+}
+
 const TYPE_ORDER = ['asset', 'liability', 'equity', 'revenue', 'expense'];
 
 const TYPE_LABELS: Record<string, string> = {
@@ -58,8 +64,7 @@ export default function TrialBalancePage() {
   const filteredRows = useMemo(() => {
     const rows = trialQ.data ?? [];
     const needle = search.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((row) => {
+    const scopedRows = !needle ? rows : rows.filter((row) => {
       const haystack = [
         row.accountCode,
         row.accountNameAr,
@@ -68,10 +73,19 @@ export default function TrialBalancePage() {
       ].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(needle);
     });
+    return scopedRows.map((row) => {
+      const balance = Number(row.debit || 0) - Number(row.credit || 0);
+      return {
+        ...row,
+        balance,
+        balanceAbs: Math.abs(balance),
+        balanceSide: balance > 0.009 ? 'مدين' : balance < -0.009 ? 'دائن' : 'متوازن',
+      } satisfies TrialBalanceComputedRow;
+    });
   }, [search, trialQ.data]);
 
   const groups = useMemo(() => {
-    const grouped = new Map<string, TrialBalanceRow[]>();
+    const grouped = new Map<string, TrialBalanceComputedRow[]>();
     for (const row of filteredRows) {
       const key = normalizeType(row.accountType);
       const bucket = grouped.get(key) || [];
@@ -89,12 +103,14 @@ export default function TrialBalancePage() {
       const rows = grouped.get(key) || [];
       const debit = rows.reduce((sum, row) => sum + Number(row.debit || 0), 0);
       const credit = rows.reduce((sum, row) => sum + Number(row.credit || 0), 0);
+      const balance = rows.reduce((sum, row) => sum + Number(row.balance || 0), 0);
       return {
         key,
         label: TYPE_LABELS[key] ?? key ?? 'غير مصنف',
         rows,
         debit,
         credit,
+        balance,
       };
     });
   }, [filteredRows]);
@@ -189,6 +205,18 @@ export default function TrialBalancePage() {
     >
       <div className="text-xs text-slate-500" dir="rtl">المحاسبة &gt; ميزان المراجعة</div>
 
+      <div
+        className={`rounded-xl border px-4 py-3 text-sm ${
+          totals.isBalanced
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+            : 'border-amber-200 bg-amber-50 text-amber-800'
+        }`}
+      >
+        {totals.isBalanced
+          ? 'الميزان متوازن حاليًا. إجمالي المدين يساوي إجمالي الدائن.'
+          : `الميزان غير متوازن. الفرق الحالي بين المدين والدائن هو ${fmtMoney(totals.difference)} ج.م.`}
+      </div>
+
       {trialQ.error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {(trialQ.error as Error).message}
@@ -258,7 +286,8 @@ export default function TrialBalancePage() {
                     <tr>
                       <th className="px-4 py-3 text-right font-medium">رمز الحساب</th>
                       <th className="px-4 py-3 text-right font-medium">اسم الحساب</th>
-                      <th className="px-4 py-3 text-right font-medium">الاتجاه الغالب</th>
+                      <th className="px-4 py-3 text-right font-medium">نوع الرصيد</th>
+                      <th className="px-4 py-3 text-left font-medium">الرصيد</th>
                       <th className="px-4 py-3 text-left font-medium">مدين</th>
                       <th className="px-4 py-3 text-left font-medium">دائن</th>
                     </tr>
@@ -272,7 +301,10 @@ export default function TrialBalancePage() {
                           {row.accountNameEn && <div className="mt-1 text-xs text-slate-500">{row.accountNameEn}</div>}
                         </td>
                         <td className="px-4 py-3 text-xs text-slate-600">
-                          {row.debit > row.credit ? 'مدين' : row.credit > row.debit ? 'دائن' : 'متوازن'}
+                          {row.balanceSide}
+                        </td>
+                        <td className="px-4 py-3 text-left font-semibold tabular-nums text-slate-900">
+                          {row.balanceAbs > 0 ? fmtMoney(row.balanceAbs) : '—'}
                         </td>
                         <td className="px-4 py-3 text-left font-semibold tabular-nums text-slate-900">
                           {row.debit > 0 ? fmtMoney(row.debit) : '—'}
@@ -285,7 +317,11 @@ export default function TrialBalancePage() {
                   </tbody>
                   <tfoot className="border-t border-slate-200 bg-slate-50">
                     <tr>
-                      <td colSpan={3} className="px-4 py-3 text-right text-sm font-semibold text-slate-700">إجمالي المجموعة</td>
+                      <td colSpan={2} className="px-4 py-3 text-right text-sm font-semibold text-slate-700">إجمالي المجموعة</td>
+                      <td className="px-4 py-3 text-right text-sm font-semibold text-slate-700">
+                        {group.balance > 0.009 ? 'مدين' : group.balance < -0.009 ? 'دائن' : 'متوازن'}
+                      </td>
+                      <td className="px-4 py-3 text-left text-sm font-bold tabular-nums text-slate-900">{fmtMoney(Math.abs(group.balance))}</td>
                       <td className="px-4 py-3 text-left text-sm font-bold tabular-nums text-slate-900">{fmtMoney(group.debit)}</td>
                       <td className="px-4 py-3 text-left text-sm font-bold tabular-nums text-slate-900">{fmtMoney(group.credit)}</td>
                     </tr>
@@ -294,6 +330,38 @@ export default function TrialBalancePage() {
               </div>
             </section>
           ))}
+
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+              <h3 className="text-sm font-bold text-slate-900">الإجماليات النهائية</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-white text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3 text-right font-medium">البيان</th>
+                    <th className="px-4 py-3 text-left font-medium">القيمة</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  <tr>
+                    <td className="px-4 py-3 text-slate-700">إجمالي المدين</td>
+                    <td className="px-4 py-3 text-left font-semibold tabular-nums text-slate-900">{fmtMoney(totals.totalDebit)}</td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-3 text-slate-700">إجمالي الدائن</td>
+                    <td className="px-4 py-3 text-left font-semibold tabular-nums text-slate-900">{fmtMoney(totals.totalCredit)}</td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-3 text-slate-700">الفرق</td>
+                    <td className={`px-4 py-3 text-left font-semibold tabular-nums ${totals.isBalanced ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {fmtMoney(totals.difference)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
       )}
 

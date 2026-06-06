@@ -1,5 +1,5 @@
 import { apiError, apiSuccess, handleApiError } from '@/lib/api-response';
-import { getAuthenticatedUser } from '@/lib/auth';
+import { getAuthenticatedUser, checkPermission } from '@/lib/auth';
 import {
   createPartyDebtTransaction,
   getPartyDebtSummary,
@@ -20,6 +20,7 @@ export async function GET(request: Request) {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
+    if (!checkPermission(user, 'view_accounting')) return apiError('ليس لديك صلاحية', 403);
 
     const { searchParams } = new URL(request.url);
     const partyType = parsePartyType(searchParams.get('partyType'));
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
     const user = await getAuthenticatedUser(request);
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!user.tenantId) return apiError('لم يتم تعيين مستأجر للمستخدم', 400);
+    if (!checkPermission(user, 'manage_accounting')) return apiError('ليس لديك صلاحية', 403);
 
     const body = await request.json().catch(() => ({}));
     const partyType = parsePartyType(String(body.partyType || ''));
@@ -46,6 +48,8 @@ export async function POST(request: Request) {
     const transactionType = String(body.transactionType || '').trim() as PartyDebtAction;
     const amount = Number(body.amount);
     const cashboxId = String(body.cashboxId || '').trim();
+    const settlementSource = String(body.settlementSource || 'cashbox').trim() === 'bank' ? 'bank' : 'cashbox';
+    const settlementAccountCode = body.settlementAccountCode ? String(body.settlementAccountCode).trim() : null;
     const date = body.date ? new Date(body.date) : new Date();
     const notes = body.notes ? String(body.notes).trim() : null;
 
@@ -61,7 +65,7 @@ export async function POST(request: Request) {
       return apiError('نوع الحركة لا يناسب المورد', 400);
     }
     if (!Number.isFinite(amount) || amount <= 0) return apiError('المبلغ يجب أن يكون أكبر من صفر', 400);
-    if (!cashboxId) return apiError('يجب اختيار الخزنة', 400);
+    if (settlementSource === 'cashbox' && !cashboxId) return apiError('يجب اختيار الخزنة', 400);
     if (Number.isNaN(date.getTime())) return apiError('التاريخ غير صالح', 400);
 
     const row = await createPartyDebtTransaction({
@@ -71,7 +75,9 @@ export async function POST(request: Request) {
       partyId,
       transactionType,
       amount,
+      settlementSource,
       cashboxId,
+      settlementAccountCode,
       date,
       notes,
     });

@@ -52,10 +52,6 @@ export default function AccountingBalanceSheetPage() {
     >
       <div className="text-xs text-slate-500" dir="rtl">المحاسبة &gt; الميزانية العمومية</div>
 
-      <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 px-4 py-3 text-sm text-indigo-900">
-        الطباعة وملفات PDF وExcel موجودة فقط داخل قسم التقارير. هذه الصفحة مخصصة للقراءة اليومية وإدخال الأصول ومراجعة الأثر المحاسبي.
-      </div>
-
       <FixedAssetsPanel onCreated={() => q.refetch()} />
 
       {q.error ? (

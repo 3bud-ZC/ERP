@@ -250,12 +250,14 @@ export async function createPartyDebtTransaction(params: {
   transactionType: PartyDebtAction;
   amount: number;
   date?: Date | string | null;
-  cashboxId: string;
+  settlementSource: 'cashbox' | 'bank';
+  cashboxId?: string | null;
+  settlementAccountCode?: string | null;
   notes?: string | null;
 }) {
   const amount = normalAmount(params.amount);
   if (amount <= 0) throw new Error('المبلغ يجب أن يكون أكبر من صفر');
-  if (!params.cashboxId) throw new Error('يجب اختيار الخزنة');
+  if (params.settlementSource === 'cashbox' && !params.cashboxId) throw new Error('يجب اختيار الخزنة');
 
   return prisma.$transaction(async (tx) => {
     const partyExists = params.partyType === 'customer'
@@ -272,27 +274,36 @@ export async function createPartyDebtTransaction(params: {
         transactionType: params.transactionType,
         amount,
         date,
-        cashboxId: params.cashboxId,
+        cashboxId: params.settlementSource === 'cashbox' ? params.cashboxId : null,
         notes: params.notes || null,
         createdBy: params.userId,
         tenantId: params.tenantId,
       },
     });
 
-    await recordCashboxTransactionInTx(tx, {
-      tenantId: params.tenantId,
-      cashboxId: params.cashboxId,
-      type: params.transactionType,
-      direction,
-      amount,
-      date,
-      referenceType: DEBT_REF,
-      referenceId: row.id,
-      description: params.notes || debtActionLabel(params.transactionType),
-      createdBy: params.userId,
-    });
+    if (params.settlementSource === 'cashbox') {
+      await recordCashboxTransactionInTx(tx, {
+        tenantId: params.tenantId,
+        cashboxId: params.cashboxId!,
+        type: params.transactionType,
+        direction,
+        amount,
+        date,
+        referenceType: DEBT_REF,
+        referenceId: row.id,
+        description: params.notes || debtActionLabel(params.transactionType),
+        createdBy: params.userId,
+      });
+    }
 
-    const lines = await buildSettlementLines(tx, params.tenantId, params.transactionType, amount);
+    const lines = await buildSettlementLines(
+      tx,
+      params.tenantId,
+      params.transactionType,
+      amount,
+      params.settlementSource,
+      params.settlementAccountCode,
+    );
     const journalEntry = await postJournalLinesInTransaction(tx, {
       tenantId: params.tenantId,
       userId: params.userId,
@@ -342,29 +353,39 @@ async function buildOpeningLines(tx: Prisma.TransactionClient, tenantId: string,
   throw new Error('نوع الرصيد الافتتاحي غير صالح');
 }
 
-async function buildSettlementLines(tx: Prisma.TransactionClient, tenantId: string, type: PartyDebtAction, amount: number): Promise<JournalLineDraft[]> {
+async function buildSettlementLines(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  type: PartyDebtAction,
+  amount: number,
+  settlementSource: 'cashbox' | 'bank',
+  settlementAccountCode?: string | null,
+): Promise<JournalLineDraft[]> {
   const profile = await getPostingProfile(tenantId);
   await ensureOperationalAccounts(tx, tenantId);
+  const settlementAccount = settlementSource === 'bank'
+    ? String(settlementAccountCode || '1010')
+    : profile.cash;
 
   switch (type) {
     case 'customer_collection':
       return [
-        line(profile.cash, amount, 0, 'تحصيل من عميل', tenantId),
+        line(settlementAccount, amount, 0, settlementSource === 'bank' ? 'تحصيل بنكي من عميل' : 'تحصيل من عميل', tenantId),
         line(profile.ar, 0, amount, 'تخفيض مديونية عميل', tenantId),
       ];
     case 'customer_refund':
       return [
         line(CUSTOMER_CREDIT_ACCOUNT, amount, 0, 'سداد رصيد دائن لعميل', tenantId),
-        line(profile.cash, 0, amount, 'صرف نقدية للعميل', tenantId),
+        line(settlementAccount, 0, amount, settlementSource === 'bank' ? 'تحويل بنكي للعميل' : 'صرف نقدية للعميل', tenantId),
       ];
     case 'supplier_payment':
       return [
         line(profile.ap, amount, 0, 'سداد مستحقات مورد', tenantId),
-        line(profile.cash, 0, amount, 'صرف نقدية للمورد', tenantId),
+        line(settlementAccount, 0, amount, settlementSource === 'bank' ? 'تحويل بنكي للمورد' : 'صرف نقدية للمورد', tenantId),
       ];
     case 'supplier_refund':
       return [
-        line(profile.cash, amount, 0, 'تحصيل من مورد', tenantId),
+        line(settlementAccount, amount, 0, settlementSource === 'bank' ? 'تحصيل بنكي من مورد' : 'تحصيل من مورد', tenantId),
         line(SUPPLIER_RECEIVABLE_ACCOUNT, 0, amount, 'تخفيض رصيد مدين على المورد', tenantId),
       ];
   }
