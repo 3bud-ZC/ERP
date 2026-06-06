@@ -59,7 +59,7 @@ const rateLimitStore = new Map<string, RateLimitEntry>();
 const RATE_LIMITS = {
   auth: { windowMs: 5 * 60 * 1000, maxRequests: 30 },      // 30 per 5 min
   init: { windowMs: 60 * 60 * 1000, maxRequests: 3 },      // 3 per hour
-  general: { windowMs: 60 * 1000, maxRequests: 100 },      // 100 per min
+  general: { windowMs: 60 * 1000, maxRequests: 300 },      // 300 per min
 };
 
 function checkRateLimit(identifier: string, tier: 'auth' | 'init' | 'general') {
@@ -90,7 +90,29 @@ function checkRateLimit(identifier: string, tier: 'auth' | 'init' | 'general') {
   return { allowed: true, remaining: config.maxRequests - entry.count };
 }
 
-function getClientId(request: NextRequest): string {
+function parseJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    return JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+  } catch {
+    return null;
+  }
+}
+
+function getClientId(request: NextRequest, tier: 'auth' | 'init' | 'general'): string {
+  if (tier === 'general') {
+    const token = request.cookies.get('token')?.value;
+    if (token) {
+      const payload = parseJwtPayload(token);
+      const userId = typeof payload?.userId === 'string' ? payload.userId : null;
+      const tenantId = typeof payload?.tenantId === 'string' ? payload.tenantId : null;
+      if (userId) {
+        return `user:${tenantId || 'no-tenant'}:${userId}`;
+      }
+    }
+  }
+
   const forwarded = request.headers.get('x-forwarded-for');
   const ip = forwarded?.split(',')[0] || 'unknown';
   const ua = request.headers.get('user-agent') || '';
@@ -209,30 +231,32 @@ export function middleware(request: NextRequest) {
   // 2. RATE LIMITING
   // ==========================================================================
   
-  const clientId = getClientId(request);
   let tier: 'auth' | 'init' | 'general' = 'general';
   
   if (pathname.startsWith('/api/auth/')) tier = 'auth';
   else if (pathname.startsWith('/api/init')) tier = 'init';
-  
-  const rateLimit = checkRateLimit(clientId, tier);
-  
-  if (!rateLimit.allowed) {
-    console.warn(`[${requestId}] Rate limit exceeded: ${tier}`);
-    return NextResponse.json(
-      {
-        success: false,
-        error: {
-          code: 'RATE_LIMIT_EXCEEDED',
-          message: `Rate limit exceeded for ${tier} endpoints.`,
-          retryAfter: rateLimit.retryAfter,
+
+  if (pathname.startsWith('/api/')) {
+    const clientId = getClientId(request, tier);
+    const rateLimit = checkRateLimit(clientId, tier);
+
+    if (!rateLimit.allowed) {
+      console.warn(`[${requestId}] Rate limit exceeded: ${tier}`);
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'RATE_LIMIT_EXCEEDED',
+            message: `Rate limit exceeded for ${tier} endpoints.`,
+            retryAfter: rateLimit.retryAfter,
+          },
         },
-      },
-      { 
-        status: 429,
-        headers: { 'Retry-After': String(rateLimit.retryAfter || 60) }
-      }
-    );
+        {
+          status: 429,
+          headers: { 'Retry-After': String(rateLimit.retryAfter || 60) },
+        }
+      );
+    }
   }
   
   // ==========================================================================

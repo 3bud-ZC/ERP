@@ -16,7 +16,18 @@ export function QueryProvider({ children }: { children: ReactNode }) {
             refetchOnWindowFocus: true,
             refetchOnReconnect: true,
             refetchOnMount: 'always',
-            retry: 1,
+            retry: (failureCount, error) => {
+              const status =
+                typeof error === 'object' && error && 'status' in error
+                  ? Number((error as { status?: number }).status)
+                  : undefined;
+
+              if (status && [400, 401, 403, 404, 409, 422, 429].includes(status)) {
+                return false;
+              }
+
+              return failureCount < 1;
+            },
           },
           mutations: {
             retry: 0,
