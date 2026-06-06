@@ -3,8 +3,8 @@
 import type { ComponentType, FormEvent } from 'react';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Building2, Landmark, Plus, RefreshCw } from 'lucide-react';
-import { apiGet, apiPost } from '@/lib/api/fetcher';
+import { Building2, Landmark, Pencil, Plus, RefreshCw } from 'lucide-react';
+import { apiGet, apiPost, apiPut } from '@/lib/api/fetcher';
 import { fmtMoneyEGP } from '@/components/reports/ReportShell';
 import { Toast, useToast } from '@/components/ui/patterns';
 import {
@@ -19,15 +19,6 @@ import {
 } from '@/components/ui/modal';
 
 type FixedAssetCategory = 'machines' | 'furniture' | 'devices' | 'vehicles' | 'other';
-
-interface AccountOption {
-  id: string;
-  code: string;
-  nameAr: string;
-  nameEn?: string | null;
-  type: string;
-  subType?: string | null;
-}
 
 interface FixedAssetRecord {
   id: string;
@@ -63,10 +54,6 @@ const DEFAULT_FORM = {
   name: '',
   purchaseCost: '',
   purchaseDate: new Date().toISOString().slice(0, 10),
-  usefulLife: '60',
-  salvageValue: '0',
-  accountCode: '',
-  creditAccountCode: '1010',
   notes: '',
 };
 
@@ -76,49 +63,13 @@ export function FixedAssetsPanel({
   onCreated: () => Promise<unknown> | unknown;
 }) {
   const [open, setOpen] = useState(false);
+  const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
   const [form, setForm] = useState(DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [toast, showToast] = useToast();
 
   const assetsQuery = useFixedAssetsQuery();
-  const accountsQuery = useAccountsQuery();
-
-  const allAssetAccounts = useMemo(() => {
-    return (accountsQuery.data ?? []).filter((account) => {
-      const type = String(account.type || '').toLowerCase();
-      const subtype = String(account.subType || '').toLowerCase();
-      return type === 'asset' && subtype !== 'header';
-    });
-  }, [accountsQuery.data]);
-
-  const assetAccounts = useMemo(() => {
-    const narrowed = allAssetAccounts.filter((account) => {
-      const subtype = String(account.subType || '').toLowerCase();
-      const name = String(account.nameAr || '').toLowerCase();
-      return (
-        subtype.includes('fixed') ||
-        name.includes('أصل') ||
-        account.code.startsWith('14') ||
-        account.code.startsWith('104')
-      );
-    });
-
-    if (narrowed.length > 0) return narrowed;
-
-    return allAssetAccounts.filter((account) => {
-      const subtype = String(account.subType || '').toLowerCase();
-      return !['cash', 'bank', 'receivable', 'inventory', 'wip'].includes(subtype);
-    });
-  }, [accountsQuery.data]);
-
-  const fundingAccounts = useMemo(() => {
-    return (accountsQuery.data ?? []).filter((account) => {
-      const type = String(account.type || '').toLowerCase();
-      const subtype = String(account.subType || '').toLowerCase();
-      return ['asset', 'liability', 'equity'].includes(type) && subtype !== 'header';
-    });
-  }, [accountsQuery.data]);
 
   const summary = useMemo(() => {
     const items = assetsQuery.data?.fixedAssets ?? [];
@@ -131,25 +82,38 @@ export function FixedAssetsPanel({
   }, [assetsQuery.data]);
 
   const categoryPlaceholder = CATEGORY_OPTIONS.find((item) => item.value === form.category)?.placeholder ?? '';
-  const canCreateAsset = !accountsQuery.isLoading && assetAccounts.length > 0 && fundingAccounts.length > 0;
 
   function openCreateModal() {
-    const defaultAssetAccount =
-      assetAccounts.find((account) => account.code === form.accountCode)?.code ||
-      assetAccounts[0]?.code ||
-      '';
-    const defaultFundingAccount =
-      fundingAccounts.find((account) => account.code === form.creditAccountCode)?.code ||
-      fundingAccounts.find((account) => account.code === '1010')?.code ||
-      fundingAccounts[0]?.code ||
-      '';
+    setEditingAssetId(null);
+    setForm(DEFAULT_FORM);
+    setFormError(null);
+    setOpen(true);
+  }
 
-    setForm((current) => ({
-      ...DEFAULT_FORM,
-      category: current.category,
-      accountCode: defaultAssetAccount,
-      creditAccountCode: defaultFundingAccount,
-    }));
+  function inferCategory(asset: FixedAssetRecord): FixedAssetCategory {
+    const haystack = `${asset.name} ${asset.description || ''}`.toLowerCase();
+    if (haystack.includes('آلة') || haystack.includes('ماكينة') || haystack.includes('machine')) return 'machines';
+    if (haystack.includes('أثاث') || haystack.includes('مكتب') || haystack.includes('furniture')) return 'furniture';
+    if (haystack.includes('جهاز') || haystack.includes('laptop') || haystack.includes('printer')) return 'devices';
+    if (haystack.includes('سيارة') || haystack.includes('vehicle') || haystack.includes('truck')) return 'vehicles';
+    return 'other';
+  }
+
+  function extractNotes(description?: string | null) {
+    if (!description) return '';
+    const noteLine = description.split('\n').find((line) => line.startsWith('ملاحظات:'));
+    return noteLine ? noteLine.replace('ملاحظات:', '').trim() : '';
+  }
+
+  function openEditModal(asset: FixedAssetRecord) {
+    setEditingAssetId(asset.id);
+    setForm({
+      category: inferCategory(asset),
+      name: asset.name,
+      purchaseCost: String(Number(asset.purchaseCost || 0)),
+      purchaseDate: new Date(asset.purchaseDate).toISOString().slice(0, 10),
+      notes: extractNotes(asset.description),
+    });
     setFormError(null);
     setOpen(true);
   }
@@ -160,29 +124,28 @@ export function FixedAssetsPanel({
     setFormError(null);
 
     try {
-      const categoryLabel = CATEGORY_OPTIONS.find((item) => item.value === form.category)?.label ?? 'أصول أخرى';
-      const assetName = `${categoryLabel} - ${form.name.trim()}`;
-      const description = [
-        `تصنيف الأصل: ${categoryLabel}`,
-        form.notes.trim() ? `ملاحظات: ${form.notes.trim()}` : null,
-      ].filter(Boolean).join('\n');
-
-      await apiPost('/api/fixed-assets', {
-        name: assetName,
-        description,
-        accountCode: form.accountCode,
-        creditAccountCode: form.creditAccountCode,
+      const payload = {
+        name: form.name.trim(),
+        category: form.category,
+        notes: form.notes.trim(),
         purchaseDate: form.purchaseDate,
         purchaseCost: Number(form.purchaseCost),
-        usefulLife: Number(form.usefulLife),
-        salvageValue: Number(form.salvageValue || 0),
-        depreciationMethod: 'straight_line',
-      });
+      };
+
+      if (editingAssetId) {
+        await apiPut('/api/fixed-assets', {
+          id: editingAssetId,
+          ...payload,
+        });
+      } else {
+        await apiPost('/api/fixed-assets', payload);
+      }
 
       setOpen(false);
+      setEditingAssetId(null);
       setForm(DEFAULT_FORM);
       await Promise.all([assetsQuery.refetch(), Promise.resolve(onCreated())]);
-      showToast('تم تسجيل الأصل الثابت وترحيل أثره المحاسبي', 'success');
+      showToast(editingAssetId ? 'تم تعديل الأصل الثابت' : 'تم تسجيل الأصل الثابت', 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'تعذر حفظ الأصل الثابت';
       setFormError(message);
@@ -219,31 +182,12 @@ export function FixedAssetsPanel({
               type="button"
               onClick={openCreateModal}
               className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
-              disabled={accountsQuery.isLoading}
             >
               <Plus className="h-4 w-4" />
               إضافة أصل ثابت
             </button>
           </div>
         </div>
-
-        {accountsQuery.error && (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {(accountsQuery.error as Error).message}
-          </div>
-        )}
-
-        {!canCreateAsset && !accountsQuery.isLoading && (
-          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            لا توجد حسابات مناسبة للأصول الثابتة أو الحساب المقابل. راجع دليل الحسابات أولًا ثم أعد المحاولة.
-          </div>
-        )}
-
-        {canCreateAsset && assetAccounts.length > 0 && !assetAccounts.some((account) => String(account.subType || '').toLowerCase().includes('fixed')) && (
-          <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
-            لم يتم العثور على حساب أصول ثابتة مخصص، لذلك يعرض النظام أقرب حسابات أصول متاحة لتتمكن من التسجيل بدون تعطيل.
-          </div>
-        )}
 
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           <MiniInfoCard title="عدد الأصول النشطة" value={String(summary.count)} subtitle="أصول غير مستبعدة من الخدمة" icon={Building2} />
@@ -274,6 +218,7 @@ export function FixedAssetsPanel({
                     <th className="px-4 py-3 text-right font-medium">التاريخ</th>
                     <th className="px-4 py-3 text-left font-medium">التكلفة</th>
                     <th className="px-4 py-3 text-left font-medium">القيمة الدفترية</th>
+                    <th className="px-4 py-3 text-right font-medium">إجراء</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -293,6 +238,16 @@ export function FixedAssetsPanel({
                       <td className="px-4 py-3 text-left font-semibold tabular-nums text-emerald-700">
                         {fmtMoneyEGP(Number(asset.netBookValue || 0))}
                       </td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(asset)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          تعديل
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -304,27 +259,21 @@ export function FixedAssetsPanel({
 
       <Modal
         open={open}
-        onClose={() => !submitting && setOpen(false)}
-        title="إضافة أصل ثابت"
-        subtitle="سيتم إنشاء الأصل وترحيل أثره المحاسبي فورًا"
+        onClose={() => !submitting && (setOpen(false), setEditingAssetId(null))}
+        title={editingAssetId ? 'تعديل أصل ثابت' : 'إضافة أصل ثابت'}
+        subtitle={editingAssetId ? 'عدّل بيانات الأصل ثم احفظ' : 'سجّل الأصل الثابت مباشرة'}
         icon={<Building2 className="h-5 w-5" />}
         footer={
           <>
-            <SecondaryButton onClick={() => setOpen(false)} disabled={submitting}>إلغاء</SecondaryButton>
+            <SecondaryButton onClick={() => { setOpen(false); setEditingAssetId(null); }} disabled={submitting}>إلغاء</SecondaryButton>
             <PrimaryButton type="submit" form="fixed-asset-form" disabled={submitting}>
-              {submitting ? 'جاري الحفظ...' : 'حفظ الأصل'}
+              {submitting ? 'جاري الحفظ...' : editingAssetId ? 'حفظ التعديل' : 'حفظ الأصل'}
             </PrimaryButton>
           </>
         }
       >
         <form id="fixed-asset-form" className="space-y-5" onSubmit={handleSubmit}>
           <FormError>{formError}</FormError>
-
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-            <div className="font-semibold text-slate-900">التأثير المحاسبي</div>
-            <div className="mt-1">حساب الأصل يزيد كأصل ثابت، والحساب المقابل هو مصدر التمويل الذي ستخرج منه القيمة.</div>
-            <div className="mt-1 font-medium text-slate-900">القيد الناتج: من حـ/ الأصل إلى حـ/ الحساب المقابل</div>
-          </div>
 
           <FieldGrid cols={2}>
             <SelectField
@@ -363,53 +312,6 @@ export function FixedAssetsPanel({
               onChange={(e) => setForm((current) => ({ ...current, purchaseDate: e.target.value }))}
               required
             />
-
-            <Field
-              label="العمر المحاسبي (بالشهور)"
-              type="number"
-              min="1"
-              step="1"
-              value={form.usefulLife}
-              onChange={(e) => setForm((current) => ({ ...current, usefulLife: e.target.value }))}
-              required
-            />
-
-            <Field
-              label="القيمة التخريدية"
-              type="number"
-              min="0"
-              step="0.01"
-              value={form.salvageValue}
-              onChange={(e) => setForm((current) => ({ ...current, salvageValue: e.target.value }))}
-            />
-
-            <SelectField
-              label="حساب الأصل"
-              value={form.accountCode}
-              onChange={(e) => setForm((current) => ({ ...current, accountCode: e.target.value }))}
-              required
-            >
-              <option value="">اختر حساب الأصل</option>
-              {assetAccounts.map((account) => (
-                <option key={account.id} value={account.code}>
-                  {account.code} - {account.nameAr}
-                </option>
-              ))}
-            </SelectField>
-
-            <SelectField
-              label="الحساب المقابل / مصدر التمويل"
-              value={form.creditAccountCode}
-              onChange={(e) => setForm((current) => ({ ...current, creditAccountCode: e.target.value }))}
-              required
-            >
-              <option value="">اختر الحساب المقابل</option>
-              {fundingAccounts.map((account) => (
-                <option key={account.id} value={account.code}>
-                  {account.code} - {account.nameAr}
-                </option>
-              ))}
-            </SelectField>
           </FieldGrid>
 
           <TextAreaField
@@ -430,15 +332,6 @@ function useFixedAssetsQuery() {
     queryKey: ['fixed-assets', 'balance-sheet-panel'],
     queryFn: () => apiGet<FixedAssetsPayload>('/api/fixed-assets?status=active&limit=12'),
     staleTime: 30_000,
-    refetchOnWindowFocus: false,
-  });
-}
-
-function useAccountsQuery() {
-  return useQuery({
-    queryKey: ['accounts', 'fixed-assets-panel'],
-    queryFn: () => apiGet<AccountOption[]>('/api/accounting/accounts?mode=picker&activeOnly=1'),
-    staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
 }
