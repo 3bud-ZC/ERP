@@ -1,0 +1,60 @@
+name: VPS Diagnostics
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Trust VPS host key
+        run: |
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Run diagnostics
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -o TCPKeepAlive=yes -o ConnectTimeout=20 "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" '
+            set -e
+            echo "== host =="
+            hostname
+            echo
+
+            echo "== pm2 status =="
+            pm2 status || true
+            echo
+
+            echo "== listening ports =="
+            ss -ltnp | grep -E ":80|:443|:3000|:3200" || true
+            echo
+
+            echo "== local health 3000 =="
+            curl -i --max-time 10 http://127.0.0.1:3000/api/health || true
+            echo
+
+            echo "== local health 3200 =="
+            curl -i --max-time 10 http://127.0.0.1:3200/api/health || true
+            echo
+
+            echo "== public health from server =="
+            curl -k -i --max-time 10 https://erp.abud.fun/api/health || true
+            echo
+
+            echo "== nginx server_name/proxy_pass =="
+            nginx -T 2>/dev/null | grep -E "server_name|proxy_pass|listen 443|listen 80|upstream" || true
+            echo
+
+            echo "== recent pm2 error log =="
+            tail -n 120 /var/www/erp/logs/pm2-error.log 2>/dev/null || true
+            echo
+
+            echo "== recent pm2 out log =="
+            tail -n 120 /var/www/erp/logs/pm2-out.log 2>/dev/null || true
+          '
