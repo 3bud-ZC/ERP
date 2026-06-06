@@ -26,7 +26,7 @@ export async function GET(request: Request) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') ?? '50', 10)));
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const where: any = { tenantId: user.tenantId };
     if (status) where.status = status;
 
     const [data, total] = await Promise.all([
@@ -113,6 +113,7 @@ export async function POST(request: Request) {
 
     // Generate asset number
     const lastAsset = await (prisma as any).fixedAsset.findFirst({
+      where: { tenantId: user.tenantId },
       orderBy: { assetNumber: 'desc' },
     });
     const nextNumber = lastAsset ? parseInt(lastAsset.assetNumber.slice(3)) + 1 : 1;
@@ -120,15 +121,16 @@ export async function POST(request: Request) {
 
     // Calculate initial net book value
     const netBookValue = purchaseCostValue - salvageValueValue;
+    const purchaseDateValue = new Date(purchaseDate);
+    const monthlyDepreciation = (purchaseCostValue - salvageValueValue) / usefulLifeValue;
 
-    // Create fixed asset
     const asset = await (prisma as any).fixedAsset.create({
       data: {
         assetNumber,
         name,
         description,
         accountCode,
-        purchaseDate: new Date(purchaseDate),
+        purchaseDate: purchaseDateValue,
         purchaseCost: purchaseCostValue,
         usefulLife: usefulLifeValue,
         salvageValue: salvageValueValue,
@@ -140,59 +142,58 @@ export async function POST(request: Request) {
       },
     });
 
-    // Create journal entry for asset purchase
-    const journalEntry = await createJournalEntry({
-      entryDate: new Date(purchaseDate),
-      description: `Purchase of fixed asset ${assetNumber} - ${name}`,
-      referenceType: 'FixedAsset',
-      referenceId: asset.id,
-      lines: [
-        {
-          accountCode: accountCode, // Fixed asset account
-          debit: purchaseCostValue,
-          credit: 0,
-          description: `Fixed asset ${name}`,
-        },
-        {
-          accountCode: offsetAccountCode,
-          debit: 0,
-          credit: purchaseCostValue,
-          description: `Funding for fixed asset ${name}`,
-        },
-      ],
-    }, user.id);
-
-    await postJournalEntry(journalEntry.id, user.id);
-
-    // Generate depreciation schedule
-    const depreciationSchedules = [];
-    const monthlyDepreciation = (purchaseCostValue - salvageValueValue) / usefulLifeValue;
-    let accumulatedDepreciation = 0;
-
-    for (let i = 0; i < usefulLifeValue; i++) {
-      const periodDate = new Date(purchaseDate);
-      periodDate.setMonth(periodDate.getMonth() + i);
+    const depreciationScheduleRows = Array.from({ length: usefulLifeValue }, (_, index) => {
+      const periodDate = new Date(purchaseDateValue);
+      periodDate.setMonth(periodDate.getMonth() + index);
       const period = `${periodDate.getFullYear()}-${String(periodDate.getMonth() + 1).padStart(2, '0')}`;
-
-      accumulatedDepreciation += monthlyDepreciation;
+      const accumulatedDepreciation = monthlyDepreciation * (index + 1);
       const currentNetBookValue = purchaseCostValue - accumulatedDepreciation;
 
-      const schedule = await (prisma as any).depreciationSchedule.create({
-        data: {
-          fixedAssetId: asset.id,
-          period,
-          depreciationAmount: monthlyDepreciation,
-          accumulatedDepreciation,
-          netBookValue: Math.max(0, currentNetBookValue),
-          posted: false,
-        },
-      });
+      return {
+        fixedAssetId: asset.id,
+        period,
+        depreciationAmount: monthlyDepreciation,
+        accumulatedDepreciation,
+        netBookValue: Math.max(0, currentNetBookValue),
+        posted: false,
+      };
+    });
 
-      depreciationSchedules.push(schedule);
+    await (prisma as any).depreciationSchedule.createMany({
+      data: depreciationScheduleRows,
+    });
+
+    let journalEntry;
+    try {
+      journalEntry = await createJournalEntry({
+        entryDate: purchaseDateValue,
+        description: `Purchase of fixed asset ${assetNumber} - ${name}`,
+        referenceType: 'FixedAsset',
+        referenceId: asset.id,
+        lines: [
+          {
+            accountCode: accountCode,
+            debit: purchaseCostValue,
+            credit: 0,
+            description: `Fixed asset ${name}`,
+          },
+          {
+            accountCode: offsetAccountCode,
+            debit: 0,
+            credit: purchaseCostValue,
+            description: `Funding for fixed asset ${name}`,
+          },
+        ],
+      }, user.id);
+
+      await postJournalEntry(journalEntry.id, user.id);
+    } catch (journalError) {
+      await (prisma as any).fixedAsset.delete({ where: { id: asset.id } });
+      throw journalError;
     }
 
     // Trigger workflow transition
-    await transitionEntity('FixedAsset', asset.id, 'active', user.id, { purchaseCost, usefulLife });
+    await transitionEntity('FixedAsset', asset.id, 'active', user.id, { purchaseCost: purchaseCostValue, usefulLife: usefulLifeValue });
 
     // Audit logging
     await logAuditAction(
@@ -202,7 +203,12 @@ export async function POST(request: Request) {
       request.headers.get('user-agent') || undefined
     );
 
-    return apiSuccess({ asset, depreciationSchedules }, 'Fixed asset created successfully');
+    const depreciationSchedules = await (prisma as any).depreciationSchedule.findMany({
+      where: { fixedAssetId: asset.id },
+      orderBy: { period: 'asc' },
+    });
+
+    return apiSuccess({ asset, depreciationSchedules, journalEntryId: journalEntry.id }, 'Fixed asset created successfully');
   } catch (error) {
     return handleApiError(error, 'Create fixed asset');
   }
@@ -223,8 +229,8 @@ export async function PUT(request: Request) {
     }
 
     // Check if asset exists
-    const existingAsset = await (prisma as any).fixedAsset.findUnique({
-      where: { id },
+    const existingAsset = await (prisma as any).fixedAsset.findFirst({
+      where: { id, tenantId: user.tenantId },
     });
 
     if (!existingAsset) {
@@ -325,8 +331,8 @@ export async function DELETE(request: Request) {
     }
 
     // Check if asset exists
-    const asset = await (prisma as any).fixedAsset.findUnique({
-      where: { id },
+    const asset = await (prisma as any).fixedAsset.findFirst({
+      where: { id, tenantId: user.tenantId },
     });
 
     if (!asset) {

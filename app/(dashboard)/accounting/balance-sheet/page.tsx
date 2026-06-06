@@ -18,6 +18,7 @@ export default function AccountingBalanceSheetPage() {
     queryKey: ['accounting', 'balance-sheet', asOf],
     queryFn: () => apiGet<BalanceSheetData>(`/api/accounting/balance-sheet?asOfDate=${asOf}`),
     staleTime: 0,
+    refetchOnWindowFocus: false,
   });
   const data = q.data;
 

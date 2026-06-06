@@ -396,15 +396,17 @@ function useFixedAssetsQuery() {
   return useQuery({
     queryKey: ['fixed-assets', 'balance-sheet-panel'],
     queryFn: () => apiGet<FixedAssetsPayload>('/api/fixed-assets?status=active&limit=12'),
-    staleTime: 0,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
 }
 
 function useAccountsQuery() {
   return useQuery({
     queryKey: ['accounts', 'fixed-assets-panel'],
-    queryFn: () => apiGet<AccountOption[]>('/api/accounts'),
-    staleTime: 0,
+    queryFn: () => apiGet<AccountOption[]>('/api/accounting/accounts?mode=picker&activeOnly=1'),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 }
 

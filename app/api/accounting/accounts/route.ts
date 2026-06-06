@@ -28,8 +28,15 @@ export async function GET(req: NextRequest) {
       return apiError('ليس لديك صلاحية لعرض المحاسبة', 403);
     }
 
+    const { searchParams } = new URL(req.url);
+    const mode = searchParams.get('mode');
+    const activeOnly = searchParams.get('activeOnly') !== '0';
+
     const accounts = await prisma.account.findMany({
-      where: { tenantId: user.tenantId },
+      where: {
+        tenantId: user.tenantId,
+        ...(activeOnly ? { isActive: true } : {}),
+      },
       select: {
         id: true,
         code: true,
@@ -41,6 +48,10 @@ export async function GET(req: NextRequest) {
       },
       orderBy: { code: 'asc' },
     });
+
+    if (mode === 'picker') {
+      return apiSuccess(accounts, `Accounts fetched for picker (${accounts.length})`);
+    }
 
     // Real balance per account = Σ debit − Σ credit across all *posted*
     // journal-entry lines for this tenant. The static `Account.balance`
