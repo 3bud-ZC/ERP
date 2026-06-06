@@ -58,10 +58,36 @@ export async function POST(request: Request) {
     if (!checkPermission(user, 'manage_accounting')) return apiError('ليس لديك صلاحية', 403);
 
     const body = await request.json();
-    const { name, description, accountCode, purchaseDate, purchaseCost, usefulLife, salvageValue, depreciationMethod } = body;
+    const {
+      name,
+      description,
+      accountCode,
+      creditAccountCode,
+      purchaseDate,
+      purchaseCost,
+      usefulLife,
+      salvageValue,
+      depreciationMethod,
+    } = body;
 
     if (!name || !accountCode || !purchaseDate || !purchaseCost || !usefulLife) {
       return apiError('Name, account code, purchase date, purchase cost, and useful life are required', 400);
+    }
+
+    const purchaseCostValue = Number(purchaseCost);
+    const usefulLifeValue = parseInt(String(usefulLife), 10);
+    const salvageValueValue = Number(salvageValue || 0);
+    if (!Number.isFinite(purchaseCostValue) || purchaseCostValue <= 0) {
+      return apiError('Purchase cost must be greater than zero', 400);
+    }
+    if (!Number.isFinite(usefulLifeValue) || usefulLifeValue <= 0) {
+      return apiError('Useful life must be greater than zero', 400);
+    }
+    if (!Number.isFinite(salvageValueValue) || salvageValueValue < 0) {
+      return apiError('Salvage value must be zero or greater', 400);
+    }
+    if (salvageValueValue > purchaseCostValue) {
+      return apiError('Salvage value cannot exceed purchase cost', 400);
     }
 
     // Validate account
@@ -73,6 +99,18 @@ export async function POST(request: Request) {
       return apiError('Account not found', 400);
     }
 
+    const offsetAccountCode = String(creditAccountCode || '1010');
+    const offsetAccount = await prisma.account.findUnique({
+      where: { tenantId_code: { tenantId: user.tenantId!, code: offsetAccountCode } },
+    });
+
+    if (!offsetAccount) {
+      return apiError('Funding account not found', 400);
+    }
+    if (offsetAccountCode === accountCode) {
+      return apiError('Funding account must be different from asset account', 400);
+    }
+
     // Generate asset number
     const lastAsset = await (prisma as any).fixedAsset.findFirst({
       orderBy: { assetNumber: 'desc' },
@@ -81,7 +119,7 @@ export async function POST(request: Request) {
     const assetNumber = `FA-${String(nextNumber).padStart(6, '0')}`;
 
     // Calculate initial net book value
-    const netBookValue = purchaseCost - (salvageValue || 0);
+    const netBookValue = purchaseCostValue - salvageValueValue;
 
     // Create fixed asset
     const asset = await (prisma as any).fixedAsset.create({
@@ -91,9 +129,9 @@ export async function POST(request: Request) {
         description,
         accountCode,
         purchaseDate: new Date(purchaseDate),
-        purchaseCost,
-        usefulLife: parseInt(usefulLife),
-        salvageValue: salvageValue || 0,
+        purchaseCost: purchaseCostValue,
+        usefulLife: usefulLifeValue,
+        salvageValue: salvageValueValue,
         depreciationMethod: depreciationMethod || 'straight_line',
         accumulatedDepreciation: 0,
         netBookValue,
@@ -111,15 +149,15 @@ export async function POST(request: Request) {
       lines: [
         {
           accountCode: accountCode, // Fixed asset account
-          debit: purchaseCost,
+          debit: purchaseCostValue,
           credit: 0,
           description: `Fixed asset ${name}`,
         },
         {
-          accountCode: '1010', // Cash or accounts payable
+          accountCode: offsetAccountCode,
           debit: 0,
-          credit: purchaseCost,
-          description: `Payment for fixed asset ${name}`,
+          credit: purchaseCostValue,
+          description: `Funding for fixed asset ${name}`,
         },
       ],
     }, user.id);
@@ -128,16 +166,16 @@ export async function POST(request: Request) {
 
     // Generate depreciation schedule
     const depreciationSchedules = [];
-    const monthlyDepreciation = (purchaseCost - (salvageValue || 0)) / (parseInt(usefulLife));
+    const monthlyDepreciation = (purchaseCostValue - salvageValueValue) / usefulLifeValue;
     let accumulatedDepreciation = 0;
 
-    for (let i = 0; i < parseInt(usefulLife); i++) {
+    for (let i = 0; i < usefulLifeValue; i++) {
       const periodDate = new Date(purchaseDate);
       periodDate.setMonth(periodDate.getMonth() + i);
       const period = `${periodDate.getFullYear()}-${String(periodDate.getMonth() + 1).padStart(2, '0')}`;
 
       accumulatedDepreciation += monthlyDepreciation;
-      const currentNetBookValue = purchaseCost - accumulatedDepreciation;
+      const currentNetBookValue = purchaseCostValue - accumulatedDepreciation;
 
       const schedule = await (prisma as any).depreciationSchedule.create({
         data: {
@@ -159,7 +197,7 @@ export async function POST(request: Request) {
     // Audit logging
     await logAuditAction(
       user.id, 'CREATE', 'accounting', 'FixedAsset', asset.id,
-      { assetNumber: asset.assetNumber, name, purchaseCost },
+      { assetNumber: asset.assetNumber, name, purchaseCost: purchaseCostValue, fundingAccount: offsetAccountCode },
       request.headers.get('x-forwarded-for') || undefined,
       request.headers.get('user-agent') || undefined
     );
