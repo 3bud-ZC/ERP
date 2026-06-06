@@ -1,6 +1,10 @@
 name: VPS Diagnostics
 
 on:
+  push:
+    branches: [final]
+    paths:
+      - '.github/workflows/vps-diagnostics.yml'
   workflow_dispatch:
 
 jobs:
