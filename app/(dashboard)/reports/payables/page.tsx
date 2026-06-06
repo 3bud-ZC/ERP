@@ -13,6 +13,9 @@ import {
 
 interface Row {
   invoiceId: string;
+  rowType?: string;
+  statement?: string;
+  reference?: string;
   invoiceNumber: string;
   invoiceDate?: string;
   supplier: { code: string; nameAr: string };
@@ -92,7 +95,7 @@ export default function PayablesReportPage() {
     <ReportsLayout title="تقرير مستحقات الموردين" subtitle={subtitle}>
       <ReportShell
         title="تقرير مستحقات الموردين"
-        subtitle="تحليل الفواتير المفتوحة والمدفوعات حسب المورد"
+        subtitle="يشمل الرصيد الافتتاحي والفواتير المفتوحة والسداد المباشر حسب المورد"
         periodLabel={periodLabel}
         exportConfig={{ report: 'payables', params: { fromDate: filters.from, toDate: filters.to, status: filters.status } }}
         loading={loading}
@@ -148,7 +151,7 @@ export default function PayablesReportPage() {
         }
       >
         <div className="grid gap-3 md:grid-cols-5">
-          <ReportSummaryCard label="إجمالي الفواتير" value={summary.invoiceCount.toString()} />
+          <ReportSummaryCard label="إجمالي البنود" value={summary.invoiceCount.toString()} />
           <ReportSummaryCard label="إجمالي قيمة الفواتير" value={fmtMoneyEGP(summary.totalInvoices)} />
           <ReportSummaryCard label="إجمالي المدفوع" value={fmtMoneyEGP(summary.totalPaid)} />
           <ReportSummaryCard label="إجمالي المتبقي" value={fmtMoneyEGP(summary.totalRemaining)} accent="bg-red-50 border-red-200" />
@@ -160,8 +163,9 @@ export default function PayablesReportPage() {
             <thead className="bg-slate-50 text-slate-500">
               <tr>
                 <th className="px-4 py-3 text-right">المورد</th>
-                <th className="px-4 py-3 text-right">الفاتورة</th>
-                <th className="px-4 py-3 text-right">تاريخ الفاتورة</th>
+                <th className="px-4 py-3 text-right">البيان</th>
+                <th className="px-4 py-3 text-right">المرجع</th>
+                <th className="px-4 py-3 text-right">التاريخ</th>
                 <th className="px-4 py-3 text-right">الاستحقاق</th>
                 <th className="px-4 py-3 text-right">الإجمالي</th>
                 <th className="px-4 py-3 text-right">المدفوع</th>
@@ -172,19 +176,20 @@ export default function PayablesReportPage() {
             <tbody className="divide-y divide-slate-100">
               {!loading && rows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                     لا توجد مستحقات مطابقة للفلاتر الحالية.
                   </td>
                 </tr>
               ) : rows.map((r) => (
                 <tr key={r.invoiceId} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-semibold">{r.supplier.nameAr}</td>
-                  <td className="px-4 py-3">{r.invoiceNumber}</td>
+                  <td className="px-4 py-3">{r.statement || 'فاتورة'}</td>
+                  <td className="px-4 py-3">{r.reference || r.invoiceNumber}</td>
                   <td className="px-4 py-3">{formatDate(r.invoiceDate)}</td>
                   <td className="px-4 py-3">{formatDate(r.dueDate)}</td>
                   <td className="px-4 py-3">{fmtMoneyEGP(r.total)}</td>
                   <td className="px-4 py-3">{fmtMoneyEGP(r.paid)}</td>
-                  <td className="px-4 py-3 font-bold text-red-700">{fmtMoneyEGP(r.remaining)}</td>
+                  <td className={`px-4 py-3 font-bold ${r.remaining >= 0 ? 'text-red-700' : 'text-emerald-700'}`}>{fmtMoneyEGP(r.remaining)}</td>
                   <td className="px-4 py-3">{r.overdueDays}</td>
                 </tr>
               ))}

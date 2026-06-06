@@ -8,6 +8,7 @@ import { getAuthenticatedUser } from '@/lib/auth';
 import { hasReportAccess, type ReportKey } from '@/lib/reports/report-access';
 import { buildWasteReportData, type WasteReportSource } from '@/lib/reports/waste-report';
 import { buildBalanceSheetData } from '@/lib/reports/balance-sheet';
+import { openingNet } from '@/lib/services/party-debt.service';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -395,80 +396,126 @@ async function buildOpenInvoiceDataset(kind: 'sales' | 'purchase', tenantId: str
   const toDate = endOfDay(parseDate(params.get('toDate')));
   const isSales = kind === 'sales';
 
-  const invoices = isSales
-    ? await prisma.salesInvoice.findMany({
-        where: {
-          tenantId,
-          date: { gte: fromDate, lte: toDate },
-          ...(paymentStatus && paymentStatus !== 'all' && paymentStatus !== 'open' ? { paymentStatus } : {}),
-        },
-        select: {
-          invoiceNumber: true,
-          date: true,
-          total: true,
-          grandTotal: true,
-          paidAmount: true,
-          paymentStatus: true,
-          paymentTermsDays: true,
-          customer: { select: { code: true, nameAr: true } },
-        },
-        orderBy: { date: 'desc' },
-      })
-    : await prisma.purchaseInvoice.findMany({
-        where: {
-          tenantId,
-          date: { gte: fromDate, lte: toDate },
-          ...(paymentStatus && paymentStatus !== 'all' && paymentStatus !== 'open' ? { paymentStatus } : {}),
-        },
-        select: {
-          invoiceNumber: true,
-          date: true,
-          total: true,
-          grandTotal: true,
-          paidAmount: true,
-          paymentStatus: true,
-          paymentTermsDays: true,
-          supplier: { select: { code: true, nameAr: true } },
-        },
-        orderBy: { date: 'desc' },
-      });
+  const [parties, invoices, settlements] = await Promise.all([
+    isSales
+      ? prisma.customer.findMany({
+          where: { tenantId, isActive: true },
+          select: { id: true, code: true, nameAr: true, openingBalanceType: true, openingBalanceAmount: true, openingBalanceDate: true },
+        })
+      : prisma.supplier.findMany({
+          where: { tenantId, isActive: true },
+          select: { id: true, code: true, nameAr: true, openingBalanceType: true, openingBalanceAmount: true, openingBalanceDate: true },
+        }),
+    isSales
+      ? prisma.salesInvoice.findMany({
+          where: {
+            tenantId,
+            date: { gte: fromDate, lte: toDate },
+            ...(paymentStatus && paymentStatus !== 'all' && paymentStatus !== 'open' ? { paymentStatus } : {}),
+          },
+          select: {
+            invoiceNumber: true,
+            date: true,
+            total: true,
+            grandTotal: true,
+            paidAmount: true,
+            paymentStatus: true,
+            paymentTermsDays: true,
+            customer: { select: { id: true, code: true, nameAr: true } },
+          },
+          orderBy: { date: 'desc' },
+        })
+      : prisma.purchaseInvoice.findMany({
+          where: {
+            tenantId,
+            date: { gte: fromDate, lte: toDate },
+            ...(paymentStatus && paymentStatus !== 'all' && paymentStatus !== 'open' ? { paymentStatus } : {}),
+          },
+          select: {
+            invoiceNumber: true,
+            date: true,
+            total: true,
+            grandTotal: true,
+            paidAmount: true,
+            paymentStatus: true,
+            paymentTermsDays: true,
+            supplier: { select: { id: true, code: true, nameAr: true } },
+          },
+          orderBy: { date: 'desc' },
+        }),
+    prisma.partyDebtTransaction.findMany({
+      where: {
+        tenantId,
+        partyType: isSales ? 'customer' : 'supplier',
+        transactionType: isSales ? { in: ['customer_collection', 'customer_refund'] } : { in: ['supplier_payment', 'supplier_refund'] },
+        date: { gte: fromDate, lte: toDate },
+      },
+      select: {
+        id: true,
+        customerId: true,
+        supplierId: true,
+        transactionType: true,
+        amount: true,
+        date: true,
+        notes: true,
+      },
+      orderBy: { date: 'desc' },
+    }),
+  ]);
 
-  const rows = invoices
-    .map((invoice: any) => {
+  const invoiceRows = (invoices as any[])
+    .map((invoice) => {
       const total = Number(invoice.grandTotal || invoice.total || 0);
       const paid = Number(invoice.paidAmount || 0);
       const remaining = Math.max(0, total - paid);
       const dueDate = new Date(invoice.date);
       dueDate.setDate(dueDate.getDate() + Number(invoice.paymentTermsDays || 0));
       const overdueDays = remaining > 0 ? Math.max(0, Math.floor((Date.now() - dueDate.getTime()) / 86400000)) : 0;
-      return {
-        party: isSales ? invoice.customer : invoice.supplier,
-        invoiceNumber: invoice.invoiceNumber,
-        invoiceDate: invoice.date,
-        total,
-        paid,
-        remaining,
-        dueDate,
-        overdueDays,
-        paymentStatus: invoice.paymentStatus,
-      };
+      const party = isSales ? invoice.customer : invoice.supplier;
+      return [ `${party?.nameAr || '-'} (${party?.code || '-'})`, isSales ? 'فاتورة مبيعات' : 'فاتورة مشتريات', invoice.invoiceNumber, toArDate(invoice.date), toArDate(dueDate), total, paid, remaining, overdueDays ];
     })
-    .filter((row) => (paymentStatus === 'open' || !paymentStatus || paymentStatus === 'all' ? row.remaining > 0.01 : true))
-    .map((row) => [
-      `${row.party?.nameAr || '-'} (${row.party?.code || '-'})`,
-      row.invoiceNumber,
-      toArDate(row.invoiceDate),
-      toArDate(row.dueDate),
-      row.total,
-      row.paid,
-      row.remaining,
-      row.overdueDays,
-      row.paymentStatus || '—',
-    ]);
+    .filter((row) => (paymentStatus === 'open' || !paymentStatus || paymentStatus === 'all' ? Math.abs(Number(row[7])) > 0.01 : true));
+
+  const openingRows = (parties as any[])
+    .map((party) => {
+      const opening = openingNet(isSales ? 'customer' : 'supplier', party.openingBalanceType, party.openingBalanceAmount);
+      if (opening <= 0.01) return null;
+      return [
+        `${party.nameAr || '-'} (${party.code || '-'})`,
+        'رصيد افتتاحي',
+        'رصيد افتتاحي',
+        toArDate(party.openingBalanceDate),
+        toArDate(party.openingBalanceDate),
+        opening,
+        0,
+        opening,
+        0,
+      ];
+    })
+    .filter(Boolean) as Array<Array<string | number>>;
+
+  const settlementRows = (settlements as any[]).map((row) => {
+    const party = (parties as any[]).find((item) => item.id === (isSales ? row.customerId : row.supplierId));
+    const amount = Number(row.amount || 0);
+    const remaining = row.transactionType === (isSales ? 'customer_collection' : 'supplier_payment') ? -amount : amount;
+    return [
+      `${party?.nameAr || '-'} (${party?.code || '-'})`,
+      isSales ? (row.transactionType === 'customer_collection' ? 'تحصيل مباشر' : 'رصيد دائن للعميل') : (row.transactionType === 'supplier_payment' ? 'سداد مباشر' : 'تحصيل من المورد'),
+      row.notes || row.transactionType,
+      toArDate(row.date),
+      toArDate(row.date),
+      0,
+      amount,
+      remaining,
+      0,
+    ];
+  });
+
+  const rows = [...openingRows, ...invoiceRows, ...settlementRows];
 
   return {
     title: isSales ? 'تقرير مديونيات العملاء' : 'تقرير مستحقات الموردين',
-    columns: ['الطرف', 'رقم الفاتورة', 'تاريخ الفاتورة', 'الاستحقاق', 'الإجمالي', 'المدفوع', 'المتبقي', 'أيام التأخير', 'الحالة'],
+    columns: ['الطرف', 'البيان', 'المرجع', 'التاريخ', 'الاستحقاق', 'الإجمالي', 'المدفوع', 'المتبقي', 'أيام التأخير'],
     rows,
   };
 }
