@@ -35,6 +35,14 @@ jobs:
             pm2 status || true
             echo
 
+            echo "== pm2 describe erp-abud =="
+            pm2 describe erp-abud || true
+            echo
+
+            echo "== pm2 jlist =="
+            pm2 jlist || true
+            echo
+
             echo "== listening ports =="
             ss -ltnp | grep -E ":80|:443|:3000|:3200" || true
             echo
@@ -53,6 +61,12 @@ jobs:
 
             echo "== nginx server_name/proxy_pass =="
             nginx -T 2>/dev/null | grep -E "server_name|proxy_pass|listen 443|listen 80|upstream" || true
+            echo
+
+            echo "== app paths =="
+            ls -la /var/www/erp || true
+            ls -la /var/www/erp/current || true
+            ls -la /var/www/erp/current/package.json || true
             echo
 
             echo "== recent pm2 error log =="
