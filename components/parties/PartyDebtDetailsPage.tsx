@@ -57,6 +57,7 @@ interface DebtPayload {
     invoiceRemaining: number;
     directCollections?: number;
     directPayments?: number;
+    directRefunds?: number;
     currentBalance: number;
     status: string;
     lastTransactionAt?: string | null;
@@ -104,11 +105,14 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
     return type === 'asset' && (subtype.includes('bank') || account.code === '1010');
   });
   const data = debtQ.data;
-  const actionType = isCustomer ? 'customer_collection' : 'supplier_payment';
-  const actionLabel = isCustomer ? 'تحصيل من العميل' : 'سداد للمورد';
-  const canRunAction = isCustomer
-    ? Number(data?.summary.currentBalance || 0) > 0.01
-    : Number(data?.summary.currentBalance || 0) > 0.01;
+  const currentBalance = Number(data?.summary.currentBalance || 0);
+  const absBalance = Math.abs(currentBalance);
+  const actionConfig = resolveActionConfig(partyType, currentBalance);
+  const canRunAction = absBalance > 0.01 && actionConfig !== null;
+  const actionType = actionConfig?.type ?? (isCustomer ? 'customer_collection' : 'supplier_payment');
+  const actionLabel = actionConfig?.label ?? (isCustomer ? 'تحصيل من العميل' : 'سداد للمورد');
+  const actionHint = actionConfig?.hint ?? '';
+  const actionSuccessMessage = actionConfig?.successMessage ?? 'تم تسجيل الحركة بنجاح';
 
   async function submit() {
     const amount = Number(form.amount);
@@ -129,7 +133,7 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
         date: form.date,
         notes: form.notes,
       });
-      showToast('تم تسجيل الحركة بنجاح', 'success');
+      showToast(actionSuccessMessage, 'success');
       setOpen(false);
       setForm({ settlementSource: 'cashbox', cashboxId: '', settlementAccountCode: '1010', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
       await Promise.all([
@@ -137,6 +141,10 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
         queryClient.invalidateQueries({ queryKey: ['cashboxes'] }),
         queryClient.invalidateQueries({ queryKey: ['accounting', 'balance-sheet'] }),
         queryClient.invalidateQueries({ queryKey: ['accounting', 'trial-balance'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['analytics', 'alerts'] }),
+        queryClient.invalidateQueries({ queryKey: ['reports', 'receivables'] }),
+        queryClient.invalidateQueries({ queryKey: ['reports', 'payables'] }),
       ]);
     } catch (error: any) {
       showToast(error?.message || 'تعذر تسجيل الحركة', 'error');
@@ -205,6 +213,18 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
               <Info label="المتبقي" value={fmtMoneyEGP(data.summary.currentBalance)} />
               <Info label="الحالة المالية" value={data.summary.status} />
             </div>
+            <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+              <Info label={isCustomer ? 'تحصيلات مباشرة' : 'سداد مباشر'} value={fmtMoneyEGP(isCustomer ? (data.summary.directCollections || 0) : (data.summary.directPayments || 0))} />
+              <Info label={isCustomer ? 'رديات / أرصدة دائنة' : 'تحصيلات من المورد'} value={fmtMoneyEGP(data.summary.directRefunds || 0)} />
+              <Info label="آخر حركة" value={data.summary.lastTransactionAt ? new Date(data.summary.lastTransactionAt).toLocaleDateString('ar-EG') : '—'} />
+            </div>
+            {canRunAction && (
+              <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
+                <div className="font-semibold">{actionLabel}</div>
+                <div className="mt-1">{actionHint}</div>
+                <div className="mt-1 text-indigo-700">الرصيد القابل للتسوية الآن: {fmtMoneyEGP(absBalance)}</div>
+              </div>
+            )}
           </div>
 
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm" dir="rtl">
@@ -271,16 +291,15 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
               {bankAccounts.map((account) => <option key={account.id} value={account.code}>{account.code} - {account.nameAr}</option>)}
             </SelectField>
           )}
-          <Field label="المبلغ" required type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} />
+          <Field label="المبلغ" required type="number" min="0" max={absBalance > 0 ? String(absBalance) : undefined} step="0.01" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} />
           <Field label="التاريخ" required type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
           <div className="sm:col-span-2">
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
               <div className="font-semibold text-slate-900">التأثير المحاسبي</div>
               <div className="mt-1">
-                {isCustomer
-                  ? `من حـ/ ${form.settlementSource === 'bank' ? 'البنك' : 'الخزنة'} إلى حـ/ العملاء`
-                  : `من حـ/ الموردين إلى حـ/ ${form.settlementSource === 'bank' ? 'البنك' : 'الخزنة'}`}
+                {buildAccountingHint(actionType, form.settlementSource)}
               </div>
+              <div className="mt-2 text-xs text-slate-500">الرصيد الحالي للطرف: {fmtMoneyEGP(currentBalance)}</div>
             </div>
           </div>
           <div className="sm:col-span-2">
@@ -290,6 +309,60 @@ export function PartyDebtDetailsPage({ partyType, partyId }: { partyType: PartyT
       </Modal>
     </ServicesLayout>
   );
+}
+
+function resolveActionConfig(partyType: PartyType, balance: number) {
+  if (balance > 0.01) {
+    if (partyType === 'customer') {
+      return {
+        type: 'customer_collection' as const,
+        label: 'تحصيل من العميل',
+        hint: 'الطرف مدين لك. هذه الحركة تخفض المستحق على العميل وتزيد الخزنة أو البنك.',
+        successMessage: 'تم تسجيل التحصيل من العميل',
+      };
+    }
+    return {
+      type: 'supplier_payment' as const,
+      label: 'سداد للمورد',
+      hint: 'المورد له مستحقات عليك. هذه الحركة تخفض المستحق للمورد وتخفض الخزنة أو البنك.',
+      successMessage: 'تم تسجيل السداد للمورد',
+    };
+  }
+
+  if (balance < -0.01) {
+    if (partyType === 'customer') {
+      return {
+        type: 'customer_refund' as const,
+        label: 'سداد رصيد دائن للعميل',
+        hint: 'يوجد رصيد دائن للعميل. هذه الحركة تسدد المبلغ المستحق له وتخفض الخزنة أو البنك.',
+        successMessage: 'تم تسجيل سداد الرصيد الدائن للعميل',
+      };
+    }
+    return {
+      type: 'supplier_refund' as const,
+      label: 'تحصيل من المورد',
+      hint: 'يوجد رصيد لك عند المورد. هذه الحركة تحصّل المبلغ وتزيد الخزنة أو البنك.',
+      successMessage: 'تم تسجيل التحصيل من المورد',
+    };
+  }
+
+  return null;
+}
+
+function buildAccountingHint(actionType: string, settlementSource: string) {
+  const sourceLabel = settlementSource === 'bank' ? 'البنك' : 'الخزنة';
+  switch (actionType) {
+    case 'customer_collection':
+      return `من حـ/ ${sourceLabel} إلى حـ/ العملاء`;
+    case 'customer_refund':
+      return `من حـ/ أرصدة دائنة للعملاء إلى حـ/ ${sourceLabel}`;
+    case 'supplier_payment':
+      return `من حـ/ الموردين إلى حـ/ ${sourceLabel}`;
+    case 'supplier_refund':
+      return `من حـ/ ${sourceLabel} إلى حـ/ أرصدة مدينة على الموردين`;
+    default:
+      return `من حـ/ ${sourceLabel} إلى حـ/ الطرف`;
+  }
 }
 
 function Info({ label, value }: { label: string; value: string }) {

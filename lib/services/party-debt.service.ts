@@ -32,6 +32,10 @@ function asDate(value: unknown): Date {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
+function roundMoney(value: number) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+}
+
 export function openingNet(partyType: PartyType, type?: string | null, amount?: number | null): number {
   const value = normalAmount(amount);
   if (!type || value <= 0) return 0;
@@ -99,6 +103,9 @@ export async function getCustomerDebtSummary(customerId: string, tenantId: strin
       directCollections: debtRows
         .filter((r: any) => r.transactionType === 'customer_collection')
         .reduce((s: number, r: any) => s + Number(r.amount || 0), 0),
+      directRefunds: debtRows
+        .filter((r: any) => r.transactionType === 'customer_refund')
+        .reduce((s: number, r: any) => s + Number(r.amount || 0), 0),
       currentBalance: balance,
       status: balance > 0.01 ? 'مستحق على العميل' : balance < -0.01 ? 'رصيد دائن للعميل' : 'مسدد',
       lastTransactionAt: debtRows.at(-1)?.date ?? payments.at(-1)?.date ?? null,
@@ -145,6 +152,9 @@ export async function getSupplierDebtSummary(supplierId: string, tenantId: strin
       invoiceRemaining,
       directPayments: debtRows
         .filter((r: any) => r.transactionType === 'supplier_payment')
+        .reduce((s: number, r: any) => s + Number(r.amount || 0), 0),
+      directRefunds: debtRows
+        .filter((r: any) => r.transactionType === 'supplier_refund')
         .reduce((s: number, r: any) => s + Number(r.amount || 0), 0),
       currentBalance: balance,
       status: balance > 0.01 ? 'مستحق للمورد' : balance < -0.01 ? 'مستحق لنا عند المورد' : 'مسدد',
@@ -265,6 +275,18 @@ export async function createPartyDebtTransaction(params: {
       : await tx.supplier.findFirst({ where: { id: params.partyId, tenantId: params.tenantId }, select: { id: true, nameAr: true } });
     if (!partyExists) throw new Error(params.partyType === 'customer' ? 'العميل غير موجود' : 'المورد غير موجود');
 
+    const currentBalance = await getCurrentPartyBalanceInTx(tx, params.partyType, params.partyId, params.tenantId);
+    const requiredDirection = expectedBalanceDirection(params.transactionType);
+    if (requiredDirection === 'positive' && currentBalance <= 0.01) {
+      throw new Error('لا يوجد رصيد مستحق صالح لهذه الحركة');
+    }
+    if (requiredDirection === 'negative' && currentBalance >= -0.01) {
+      throw new Error('لا يوجد رصيد عكسي صالح لهذه الحركة');
+    }
+    if (amount - Math.abs(currentBalance) > 0.01) {
+      throw new Error(`المبلغ يتجاوز الرصيد القابل للتسوية (${Math.abs(roundMoney(currentBalance)).toFixed(2)})`);
+    }
+
     const date = asDate(params.date);
     const direction = cashboxDirection(params.transactionType);
     const row = await (tx as any).partyDebtTransaction.create({
@@ -320,6 +342,59 @@ export async function createPartyDebtTransaction(params: {
       data: { journalEntryId: journalEntry.id },
     });
   }, { isolationLevel: 'Serializable', maxWait: 15000, timeout: 30000 });
+}
+
+async function getCurrentPartyBalanceInTx(
+  tx: Prisma.TransactionClient,
+  partyType: PartyType,
+  partyId: string,
+  tenantId: string,
+) {
+  if (partyType === 'customer') {
+    const [customer, invoices, debtRows] = await Promise.all([
+      tx.customer.findFirst({
+        where: { id: partyId, tenantId },
+        select: { openingBalanceType: true, openingBalanceAmount: true },
+      }),
+      tx.salesInvoice.aggregate({
+        where: { tenantId, customerId: partyId },
+        _sum: { total: true, grandTotal: true, paidAmount: true },
+      }),
+      (tx as any).partyDebtTransaction.findMany({
+        where: { tenantId, customerId: partyId },
+        select: { transactionType: true, amount: true },
+      }),
+    ]);
+    const opening = openingNet('customer', customer?.openingBalanceType, customer?.openingBalanceAmount as number | null | undefined);
+    const gross = Number(invoices._sum.grandTotal || invoices._sum.total || 0);
+    const paid = Number(invoices._sum.paidAmount || 0);
+    const settlements = debtRows.reduce((s: number, row: any) => s + settlementImpact('customer', row.transactionType, Number(row.amount || 0)), 0);
+    return roundMoney(opening + Math.max(0, gross - paid) + settlements);
+  }
+
+  const [supplier, invoices, debtRows] = await Promise.all([
+    tx.supplier.findFirst({
+      where: { id: partyId, tenantId },
+      select: { openingBalanceType: true, openingBalanceAmount: true },
+    }),
+    tx.purchaseInvoice.aggregate({
+      where: { tenantId, supplierId: partyId },
+      _sum: { total: true, grandTotal: true, paidAmount: true },
+    }),
+    (tx as any).partyDebtTransaction.findMany({
+      where: { tenantId, supplierId: partyId },
+      select: { transactionType: true, amount: true },
+    }),
+  ]);
+  const opening = openingNet('supplier', supplier?.openingBalanceType, supplier?.openingBalanceAmount as number | null | undefined);
+  const gross = Number(invoices._sum.grandTotal || invoices._sum.total || 0);
+  const paid = Number(invoices._sum.paidAmount || 0);
+  const settlements = debtRows.reduce((s: number, row: any) => s + settlementImpact('supplier', row.transactionType, Number(row.amount || 0)), 0);
+  return roundMoney(opening + Math.max(0, gross - paid) + settlements);
+}
+
+function expectedBalanceDirection(type: PartyDebtAction): 'positive' | 'negative' {
+  return type === 'customer_collection' || type === 'supplier_payment' ? 'positive' : 'negative';
 }
 
 async function buildOpeningLines(tx: Prisma.TransactionClient, tenantId: string, partyType: PartyType, type: string, amount: number): Promise<JournalLineDraft[]> {

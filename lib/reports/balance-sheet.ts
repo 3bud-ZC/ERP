@@ -645,7 +645,7 @@ function buildCurrentAssetsSection(
 function buildCustomerSection(
   customers: Array<{ id: string; code: string; nameAr: string; openingBalanceType: string | null; openingBalanceAmount: number; openingBalanceDate: Date | null }>,
   salesInvoices: Array<{ customerId: string | null; _sum: { total: number | null; grandTotal: number | null; paidAmount: number | null }; _count: { _all: number } }>,
-  customerPayments: Array<{ customerId: string | null; _sum: { amount: number | null } }>,
+  _customerPayments: Array<{ customerId: string | null; _sum: { amount: number | null } }>,
   customerDebtRows: Array<{ customerId: string | null; transactionType: string; amount: number; date: Date; notes: string | null }>,
 ): BalanceSheetSection {
   const invoiceMap = new Map<string, { gross: number; paid: number; count: number }>();
@@ -656,12 +656,6 @@ function buildCustomerSection(
       paid: Number(row._sum.paidAmount || 0),
       count: row._count._all,
     });
-  }
-
-  const paymentMap = new Map<string, number>();
-  for (const row of customerPayments) {
-    if (!row.customerId) continue;
-    paymentMap.set(row.customerId, Number(row._sum.amount || 0));
   }
 
   const debtMap = new Map<string, { collection: number; refund: number }>();
@@ -682,13 +676,12 @@ function buildCustomerSection(
     const opening = openingNet('customer', customer.openingBalanceType, customer.openingBalanceAmount);
     const invoice = invoiceMap.get(customer.id) || { gross: 0, paid: 0, count: 0 };
     const debt = debtMap.get(customer.id) || { collection: 0, refund: 0 };
-    const payments = paymentMap.get(customer.id) || 0;
     const net = roundMoney(opening + (invoice.gross - invoice.paid) - debt.collection + debt.refund);
-    collectionsTotal += payments + debt.collection;
+    collectionsTotal += invoice.paid + debt.collection;
     if (net > 0) receivableTotal += net;
     if (net < 0) creditTotal += Math.abs(net);
     detailRows.push(
-      buildRow(`CUST-${customer.code}`, customer.nameAr, net, 'Customer', net >= 0 ? 'asset' : 'liability', 'memo', `فواتير: ${money(invoice.gross)} • محصل: ${money(invoice.paid + debt.collection + payments)}`),
+      buildRow(`CUST-${customer.code}`, customer.nameAr, net, 'Customer', net >= 0 ? 'asset' : 'liability', 'memo', `فواتير: ${money(invoice.gross)} • محصل: ${money(invoice.paid + debt.collection)}`),
     );
   }
 
@@ -710,7 +703,7 @@ function buildCustomerSection(
 function buildSupplierSection(
   suppliers: Array<{ id: string; code: string; nameAr: string; openingBalanceType: string | null; openingBalanceAmount: number; openingBalanceDate: Date | null }>,
   purchaseInvoices: Array<{ supplierId: string | null; _sum: { total: number | null; grandTotal: number | null; paidAmount: number | null }; _count: { _all: number } }>,
-  supplierPayments: Array<{ supplierId: string | null; _sum: { amount: number | null } }>,
+  _supplierPayments: Array<{ supplierId: string | null; _sum: { amount: number | null } }>,
   supplierDebtRows: Array<{ supplierId: string | null; transactionType: string; amount: number; date: Date; notes: string | null }>,
 ): BalanceSheetSection {
   const invoiceMap = new Map<string, { gross: number; paid: number; count: number }>();
@@ -721,12 +714,6 @@ function buildSupplierSection(
       paid: Number(row._sum.paidAmount || 0),
       count: row._count._all,
     });
-  }
-
-  const paymentMap = new Map<string, number>();
-  for (const row of supplierPayments) {
-    if (!row.supplierId) continue;
-    paymentMap.set(row.supplierId, Number(row._sum.amount || 0));
   }
 
   const debtMap = new Map<string, { payment: number; refund: number }>();
@@ -747,13 +734,12 @@ function buildSupplierSection(
     const opening = openingNet('supplier', supplier.openingBalanceType, supplier.openingBalanceAmount);
     const invoice = invoiceMap.get(supplier.id) || { gross: 0, paid: 0, count: 0 };
     const debt = debtMap.get(supplier.id) || { payment: 0, refund: 0 };
-    const payments = paymentMap.get(supplier.id) || 0;
     const net = roundMoney(opening + (invoice.gross - invoice.paid) - debt.payment + debt.refund);
-    paymentsTotal += payments + debt.payment;
+    paymentsTotal += invoice.paid + debt.payment;
     if (net > 0) payableTotal += net;
     if (net < 0) debitTotal += Math.abs(net);
     detailRows.push(
-      buildRow(`SUP-${supplier.code}`, supplier.nameAr, net, 'Supplier', net >= 0 ? 'liability' : 'asset', 'memo', `فواتير: ${money(invoice.gross)} • مسدد: ${money(invoice.paid + debt.payment + payments)}`),
+      buildRow(`SUP-${supplier.code}`, supplier.nameAr, net, 'Supplier', net >= 0 ? 'liability' : 'asset', 'memo', `فواتير: ${money(invoice.gross)} • مسدد: ${money(invoice.paid + debt.payment)}`),
     );
   }
 

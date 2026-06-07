@@ -46,7 +46,7 @@ const defaultSummary: Summary = {
 export default function ReceivablesReportPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [summary, setSummary] = useState<Summary>(defaultSummary);
-  const [filters, setFilters] = useState({ from: '', to: '', status: 'open' });
+  const [filters, setFilters] = useState({ from: '', to: '', status: 'all' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -127,8 +127,8 @@ export default function ReceivablesReportPage() {
                 onChange={(e) => setFilters({ ...filters, status: e.target.value })}
                 className={reportInputCls}
               >
-                <option value="open">مفتوحة</option>
                 <option value="all">كل الحالات</option>
+                <option value="open">مفتوحة</option>
                 <option value="unpaid">غير مدفوعة</option>
                 <option value="partial">مدفوعة جزئيًا</option>
                 <option value="paid">مدفوعة</option>
@@ -183,7 +183,20 @@ export default function ReceivablesReportPage() {
               ) : rows.map((r) => (
                 <tr key={r.invoiceId} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-semibold">{r.customer.nameAr}</td>
-                  <td className="px-4 py-3">{r.statement || 'فاتورة'}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col gap-1">
+                      <span>{r.statement || 'فاتورة'}</span>
+                      <span className={`inline-flex w-fit rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        r.rowType === 'settlement'
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : r.rowType === 'opening_balance'
+                            ? 'bg-amber-50 text-amber-700'
+                            : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {r.rowType === 'settlement' ? 'حركة تحصيل/تسوية' : r.rowType === 'opening_balance' ? 'رصيد افتتاحي' : 'فاتورة'}
+                      </span>
+                    </div>
+                  </td>
                   <td className="px-4 py-3">{r.reference || r.invoiceNumber}</td>
                   <td className="px-4 py-3">{formatDate(r.invoiceDate)}</td>
                   <td className="px-4 py-3">{formatDate(r.dueDate)}</td>
