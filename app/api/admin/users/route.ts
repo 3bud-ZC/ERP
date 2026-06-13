@@ -299,12 +299,14 @@ export async function PUT(request: Request) {
       email: true,
       isActive: true,
       userTenantRoles: {
+        orderBy: { assignedAt: 'desc' },
         select: {
           tenantId: true,
           roleId: true,
         },
       },
       roles: {
+        orderBy: { assignedAt: 'desc' },
         select: {
           roleId: true,
         },
@@ -350,21 +352,25 @@ export async function PUT(request: Request) {
       },
     });
 
+    const existingTenantRole = existing.userTenantRoles[0];
+    const existingGlobalRole = existing.roles[0];
+    const nextTenantId = requestedTenantId || existingTenantRole?.tenantId;
+    const nextRoleId = roleId || existingTenantRole?.roleId || existingGlobalRole?.roleId || null;
+
     if (roleId) {
       await tx.userRole.deleteMany({ where: { userId: id } });
       await tx.userRole.create({ data: { userId: id, roleId } });
+    }
 
-      const targetTenantId = requestedTenantId || existing.userTenantRoles[0]?.tenantId;
-      if (targetTenantId) {
-        await tx.userTenantRole.deleteMany({ where: { userId: id } });
-        await tx.userTenantRole.create({
-          data: {
-            userId: id,
-            tenantId: targetTenantId,
-            roleId,
-          },
-        });
-      }
+    if (nextTenantId && nextRoleId && (roleId || requestedTenantId)) {
+      await tx.userTenantRole.deleteMany({ where: { userId: id } });
+      await tx.userTenantRole.create({
+        data: {
+          userId: id,
+          tenantId: nextTenantId,
+          roleId: nextRoleId,
+        },
+      });
     }
 
     if (!row.isActive) {
