@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Download, RefreshCw, RotateCcw, Search } from 'lucide-react';
 import { fmtMoney } from '@/components/invoices/InvoiceConfig';
@@ -21,22 +21,24 @@ interface TxRow {
   cashbox?: { id: string; code: string; name: string };
 }
 
+const EMPTY_FILTERS = { from: '', to: '', type: '', reference: '' };
+
 export function TreasuryTransactionsPageContent() {
   const [toast, showToast] = useToast();
   const [rows, setRows] = useState<TxRow[]>([]);
   const [summary, setSummary] = useState({ totalInflow: 0, totalOutflow: 0, transactionCount: 0 });
-  const [filters, setFilters] = useState({ from: '', to: '', type: '', reference: '' });
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  async function load() {
+  const load = useCallback(async (nextFilters: typeof EMPTY_FILTERS) => {
     setLoading(true);
     setError('');
     const params = new URLSearchParams({ transactions: 'true' });
-    if (filters.from) params.set('from', filters.from);
-    if (filters.to) params.set('to', filters.to);
-    if (filters.type) params.set('type', filters.type);
-    if (filters.reference) params.set('reference', filters.reference);
+    if (nextFilters.from) params.set('from', nextFilters.from);
+    if (nextFilters.to) params.set('to', nextFilters.to);
+    if (nextFilters.type) params.set('type', nextFilters.type);
+    if (nextFilters.reference) params.set('reference', nextFilters.reference);
     try {
       const res = await fetch(`/api/cashboxes?${params.toString()}`, { credentials: 'include', cache: 'no-store' });
       const json = await res.json();
@@ -48,9 +50,9 @@ export function TreasuryTransactionsPageContent() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(EMPTY_FILTERS); }, [load]);
 
   async function reverseManual(id: string) {
     const ok = window.confirm('تأكيد: هل تريد عكس هذه الحركة اليدوية؟ سيتم إنشاء حركة عكس بنفس المبلغ.');
@@ -64,7 +66,7 @@ export function TreasuryTransactionsPageContent() {
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.success) throw new Error(json?.message || 'تعذر عكس الحركة');
       showToast(json?.message || 'تم عكس الحركة بنجاح', 'success');
-      await load();
+      await load(filters);
     } catch (err: any) {
       showToast(err?.message || 'تعذر عكس الحركة', 'error');
     }
@@ -138,7 +140,7 @@ export function TreasuryTransactionsPageContent() {
             <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input value={filters.reference} onChange={(e) => setFilters({ ...filters, reference: e.target.value })} placeholder="المرجع أو الوصف" className={`${inputCls} pr-9`} />
           </div>
-          <button onClick={load} className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-sm font-semibold text-white">
+          <button onClick={() => void load(filters)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-sm font-semibold text-white">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> تطبيق
           </button>
         </div>

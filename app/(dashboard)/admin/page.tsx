@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Activity,
@@ -202,7 +202,7 @@ export default function PlatformAdminPage() {
     });
   }, [userRoleFilter, userSearch, userStatusFilter, userTenantFilter, users]);
 
-  async function fetchJson(url: string, init?: RequestInit) {
+  const fetchJson = useCallback(async (url: string, init?: RequestInit) => {
     const res = await fetch(url, { credentials: 'include', cache: 'no-store', ...init });
     const text = await res.text();
     let json: any = null;
@@ -219,9 +219,9 @@ export default function PlatformAdminPage() {
       throw new Error(message);
     }
     return json.data;
-  }
+  }, [router]);
 
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -244,11 +244,11 @@ export default function PlatformAdminPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [fetchJson]);
 
   useEffect(() => {
-    loadAll();
-  }, []);
+    void loadAll();
+  }, [loadAll]);
 
   function startBusy(key: string) {
     setBusy(key);

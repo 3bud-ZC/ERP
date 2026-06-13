@@ -67,6 +67,10 @@ interface PurchaseInvoice {
   supplier?: { nameAr: string };
 }
 
+const EMPTY_SALES_INVOICES: SalesInvoice[] = [];
+const EMPTY_PURCHASE_INVOICES: PurchaseInvoice[] = [];
+const EMPTY_ROWS: any[] = [];
+
 function toNum(v: unknown): number {
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
   if (typeof v === 'string') {
@@ -132,10 +136,10 @@ export default function DashboardPage() {
   const refreshing = [dashQ, salesQ, purchasesQ, customersQ, suppliersQ].some((q) => q.isFetching && !q.isLoading);
 
   const dash = dashQ.data;
-  const sales = salesQ.data ?? [];
-  const purchases = purchasesQ.data ?? [];
-  const customers = customersQ.data ?? [];
-  const suppliers = suppliersQ.data ?? [];
+  const sales = salesQ.data ?? EMPTY_SALES_INVOICES;
+  const purchases = purchasesQ.data ?? EMPTY_PURCHASE_INVOICES;
+  const customers = customersQ.data ?? EMPTY_ROWS;
+  const suppliers = suppliersQ.data ?? EMPTY_ROWS;
 
   const invoiceInsights = useMemo(() => {
     const salesTotal = sales.reduce((s, i) => s + toNum(i.grandTotal ?? i.total), 0);

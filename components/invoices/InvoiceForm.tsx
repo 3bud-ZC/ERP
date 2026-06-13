@@ -177,17 +177,6 @@ export function InvoiceForm({
     }
   }, [cashboxes, cashboxId, paymentStatus, paidAmount]);
 
-  useEffect(() => {
-    if (paymentStatus === 'unpaid') {
-      setPaidAmount('0');
-    } else if (paymentStatus === 'cash' || paymentStatus === 'paid') {
-      // @ts-ignore
-      if (typeof grandTotal !== 'undefined') {
-        // Will be updated by the next render if grandTotal changes
-      }
-    }
-  }, [paymentStatus]);
-
   const totals = useMemo(() => {
     const validLines = lines.filter(l => l.productId && parseFloat(l.quantity) > 0);
     return computeInvoiceTotals({
@@ -216,10 +205,17 @@ export function InvoiceForm({
   const effectivePaidAmount = paymentStatus === 'unpaid' ? 0 : (isAutoFullPayment ? grandTotal : parsedPaidAmount);
 
   useEffect(() => {
-    if (isAutoFullPayment) {
-      setPaidAmount(String(grandTotal));
-    }
-  }, [isAutoFullPayment, grandTotal]);
+    setPaidAmount((current) => {
+      if (paymentStatus === 'unpaid') {
+        return current === '0' ? current : '0';
+      }
+      if (paymentStatus === 'cash' || paymentStatus === 'paid') {
+        const nextValue = String(grandTotal);
+        return current === nextValue ? current : nextValue;
+      }
+      return current;
+    });
+  }, [paymentStatus, grandTotal]);
 
   /* ── Line helpers ── */
   const setLine = useCallback((i: number, field: keyof InvoiceLine, val: string) => {
