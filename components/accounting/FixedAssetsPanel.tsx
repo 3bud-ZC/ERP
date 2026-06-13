@@ -92,6 +92,18 @@ export function FixedAssetsPanel({
 
   const categoryPlaceholder = CATEGORY_OPTIONS.find((item) => item.value === form.category)?.placeholder ?? '';
 
+  async function refreshAfterSave() {
+    const results = await Promise.allSettled([
+      assetsQuery.refetch(),
+      Promise.resolve(onCreated()),
+    ]);
+
+    const firstFailure = results.find((result) => result.status === 'rejected');
+    if (firstFailure?.status === 'rejected') {
+      console.error('Fixed asset post-save refresh failed:', firstFailure.reason);
+    }
+  }
+
   function openCreateModal() {
     setEditingAssetId(null);
     setForm(DEFAULT_FORM);
@@ -160,11 +172,13 @@ export function FixedAssetsPanel({
         });
       }
 
+      const successMessage = editingAssetId ? 'تم تعديل الأصل الثابت بنجاح' : 'تم تسجيل الأصل الثابت بنجاح';
       setOpen(false);
       setEditingAssetId(null);
       setForm(DEFAULT_FORM);
-      await Promise.all([assetsQuery.refetch(), Promise.resolve(onCreated())]);
-      showToast(editingAssetId ? 'تم تعديل الأصل الثابت' : 'تم تسجيل الأصل الثابت', 'success');
+      setFormError(null);
+      showToast(successMessage, 'success');
+      void refreshAfterSave();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'تعذر حفظ الأصل الثابت';
       setFormError(message);
