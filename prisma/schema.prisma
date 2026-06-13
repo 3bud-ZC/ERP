@@ -1272,7 +1272,7 @@ model Accrual {
 
 model FixedAsset {
   id                      String                 @id @default(cuid())
-  assetNumber             String                 @unique
+  assetNumber             String
   name                    String
   description             String?
   accountCode             String
@@ -1296,6 +1296,7 @@ model FixedAsset {
   @@index([status])
   @@index([purchaseDate])
   @@index([tenantId])
+  @@unique([tenantId, assetNumber])
 }
 
 model DepreciationSchedule {
