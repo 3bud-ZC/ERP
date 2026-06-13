@@ -1,10 +1,10 @@
 'use client';
 
 import type { ComponentType, FormEvent } from 'react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Building2, Landmark, Pencil, Plus, RefreshCw } from 'lucide-react';
-import { apiGet, apiPost, apiPut } from '@/lib/api/fetcher';
+import { apiFetch, apiGet, apiPut } from '@/lib/api/fetcher';
 import { fmtMoneyEGP } from '@/components/reports/ReportShell';
 import { Toast, useToast } from '@/components/ui/patterns';
 import {
@@ -57,6 +57,14 @@ const DEFAULT_FORM = {
   notes: '',
 };
 
+function createIdempotencyKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `fixed-asset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function FixedAssetsPanel({
   onCreated,
 }: {
@@ -68,6 +76,7 @@ export function FixedAssetsPanel({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [toast, showToast] = useToast();
+  const submitLockRef = useRef<string | null>(null);
 
   const assetsQuery = useFixedAssetsQuery();
 
@@ -120,6 +129,10 @@ export function FixedAssetsPanel({
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (submitLockRef.current) return;
+
+    const idempotencyKey = createIdempotencyKey();
+    submitLockRef.current = idempotencyKey;
     setSubmitting(true);
     setFormError(null);
 
@@ -138,7 +151,13 @@ export function FixedAssetsPanel({
           ...payload,
         });
       } else {
-        await apiPost('/api/fixed-assets', payload);
+        await apiFetch('/api/fixed-assets', {
+          method: 'POST',
+          headers: {
+            'Idempotency-Key': idempotencyKey,
+          },
+          body: JSON.stringify(payload),
+        });
       }
 
       setOpen(false);
@@ -151,6 +170,7 @@ export function FixedAssetsPanel({
       setFormError(message);
       showToast(message, 'error');
     } finally {
+      submitLockRef.current = null;
       setSubmitting(false);
     }
   }

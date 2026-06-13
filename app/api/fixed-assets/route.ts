@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser, checkPermission, logAuditAction } from '@/lib/auth';
@@ -7,6 +6,7 @@ import { reverseAllJournalEntriesForReferenceId } from '@/lib/services/journal-r
 import { transitionEntity } from '@/lib/workflow-engine';
 import { registerAllEventHandlers } from '@/lib/event-handlers';
 import { getNextFixedAssetNumber } from '@/lib/fixed-assets';
+import { withIdempotency } from '@/lib/middleware/idempotency';
 
 // Register event handlers on module load
 registerAllEventHandlers();
@@ -288,112 +288,120 @@ export async function POST(request: Request) {
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!checkPermission(user, 'manage_accounting')) return apiError('ليس لديك صلاحية', 403);
 
-    const body = await request.json();
-    const {
-      name,
-      description,
-      category,
-      notes,
-      accountCode,
-      creditAccountCode,
-      purchaseDate,
-      purchaseCost,
-      usefulLife,
-      salvageValue,
-      depreciationMethod,
-    } = body;
-
-    if (!name || !purchaseDate || !purchaseCost) {
-      return apiError('الاسم والتاريخ والقيمة مطلوبة', 400);
-    }
-
-    const purchaseCostValue = Number(purchaseCost);
-    const usefulLifeValue = parseInt(String(usefulLife || DEFAULT_USEFUL_LIFE), 10);
-    const salvageValueValue = Number(salvageValue ?? DEFAULT_SALVAGE_VALUE);
-    const normalizedCategory = normalizeCategory(category);
-    if (!Number.isFinite(purchaseCostValue) || purchaseCostValue <= 0) {
-      return apiError('قيمة الأصل يجب أن تكون أكبر من صفر', 400);
-    }
-    if (!Number.isFinite(usefulLifeValue) || usefulLifeValue <= 0) {
-      return apiError('Useful life must be greater than zero', 400);
-    }
-    if (!Number.isFinite(salvageValueValue) || salvageValueValue < 0) {
-      return apiError('Salvage value must be zero or greater', 400);
-    }
-    if (salvageValueValue > purchaseCostValue) {
-      return apiError('Salvage value cannot exceed purchase cost', 400);
-    }
-
-    const { assetAccountCode, fundingAccountCode } = await resolveAssetAccounts(
-      user.tenantId!,
-      accountCode,
-      creditAccountCode,
-    );
-    if (fundingAccountCode === assetAccountCode) {
-      return apiError('الحساب المقابل يجب أن يكون مختلفًا عن حساب الأصل', 400);
-    }
-
-    // Calculate initial net book value
-    const netBookValue = purchaseCostValue - salvageValueValue;
-    const purchaseDateValue = new Date(purchaseDate);
-    const assetDescription = description || buildAssetDescription(normalizedCategory, notes);
-
-    const { asset, assetNumber } = await createFixedAssetRecord({
-      tenantId: user.tenantId!,
-      name,
-      description: assetDescription,
-      accountCode: assetAccountCode,
-      purchaseDate: purchaseDateValue,
-      purchaseCost: purchaseCostValue,
-      usefulLife: usefulLifeValue,
-      salvageValue: salvageValueValue,
-      depreciationMethod: depreciationMethod || 'straight_line',
-      netBookValue,
-    });
-
-    await recreateDepreciationSchedules({
-      fixedAssetId: asset.id,
-      purchaseDate: purchaseDateValue,
-      purchaseCost: purchaseCostValue,
-      usefulLife: usefulLifeValue,
-      salvageValue: salvageValueValue,
-    });
-
-    let journalEntry;
-    try {
-      journalEntry = await createFixedAssetJournalEntry({
-        assetId: asset.id,
-        assetNumber,
-        tenantId: user.tenantId!,
-        userId: user.id,
+    const result = await withIdempotency(request, user.tenantId!, user.id, async () => {
+      const body = await request.json();
+      const {
         name,
+        description,
+        category,
+        notes,
+        accountCode,
+        creditAccountCode,
+        purchaseDate,
+        purchaseCost,
+        usefulLife,
+        salvageValue,
+        depreciationMethod,
+      } = body;
+
+      if (!name || !purchaseDate || !purchaseCost) {
+        throw new Error('الاسم والتاريخ والقيمة مطلوبة');
+      }
+
+      const purchaseCostValue = Number(purchaseCost);
+      const usefulLifeValue = parseInt(String(usefulLife || DEFAULT_USEFUL_LIFE), 10);
+      const salvageValueValue = Number(salvageValue ?? DEFAULT_SALVAGE_VALUE);
+      const normalizedCategory = normalizeCategory(category);
+      if (!Number.isFinite(purchaseCostValue) || purchaseCostValue <= 0) {
+        throw new Error('قيمة الأصل يجب أن تكون أكبر من صفر');
+      }
+      if (!Number.isFinite(usefulLifeValue) || usefulLifeValue <= 0) {
+        throw new Error('Useful life must be greater than zero');
+      }
+      if (!Number.isFinite(salvageValueValue) || salvageValueValue < 0) {
+        throw new Error('Salvage value must be zero or greater');
+      }
+      if (salvageValueValue > purchaseCostValue) {
+        throw new Error('Salvage value cannot exceed purchase cost');
+      }
+
+      const { assetAccountCode, fundingAccountCode } = await resolveAssetAccounts(
+        user.tenantId!,
+        accountCode,
+        creditAccountCode,
+      );
+      if (fundingAccountCode === assetAccountCode) {
+        throw new Error('الحساب المقابل يجب أن يكون مختلفًا عن حساب الأصل');
+      }
+
+      const netBookValue = purchaseCostValue - salvageValueValue;
+      const purchaseDateValue = new Date(purchaseDate);
+      const assetDescription = description || buildAssetDescription(normalizedCategory, notes);
+
+      const { asset, assetNumber } = await createFixedAssetRecord({
+        tenantId: user.tenantId!,
+        name,
+        description: assetDescription,
         accountCode: assetAccountCode,
-        creditAccountCode: fundingAccountCode,
         purchaseDate: purchaseDateValue,
         purchaseCost: purchaseCostValue,
+        usefulLife: usefulLifeValue,
+        salvageValue: salvageValueValue,
+        depreciationMethod: depreciationMethod || 'straight_line',
+        netBookValue,
       });
-    } catch (journalError) {
-      await (prisma as any).fixedAsset.delete({ where: { id: asset.id } });
-      throw journalError;
-    }
 
-    // Trigger workflow transition
-    await ensureWorkflowTransition('FixedAsset', asset.id, 'active', user.id, { purchaseCost: purchaseCostValue, usefulLife: usefulLifeValue });
+      await recreateDepreciationSchedules({
+        fixedAssetId: asset.id,
+        purchaseDate: purchaseDateValue,
+        purchaseCost: purchaseCostValue,
+        usefulLife: usefulLifeValue,
+        salvageValue: salvageValueValue,
+      });
 
-    // Audit logging
-    await logAuditAction(
-      user.id, 'CREATE', 'accounting', 'FixedAsset', asset.id,
-      { assetNumber: asset.assetNumber, name, purchaseCost: purchaseCostValue, fundingAccount: fundingAccountCode },
-      request.headers.get('x-forwarded-for') || undefined,
-      request.headers.get('user-agent') || undefined
-    );
+      let journalEntry;
+      try {
+        journalEntry = await createFixedAssetJournalEntry({
+          assetId: asset.id,
+          assetNumber,
+          tenantId: user.tenantId!,
+          userId: user.id,
+          name,
+          accountCode: assetAccountCode,
+          creditAccountCode: fundingAccountCode,
+          purchaseDate: purchaseDateValue,
+          purchaseCost: purchaseCostValue,
+        });
+      } catch (journalError) {
+        await (prisma as any).fixedAsset.delete({ where: { id: asset.id } });
+        throw journalError;
+      }
 
-    const depreciationSchedules = await (prisma as any).depreciationSchedule.findMany({
-      where: { fixedAssetId: asset.id },
-      orderBy: { period: 'asc' },
+      await ensureWorkflowTransition('FixedAsset', asset.id, 'active', user.id, { purchaseCost: purchaseCostValue, usefulLife: usefulLifeValue });
+
+      await logAuditAction(
+        user.id, 'CREATE', 'accounting', 'FixedAsset', asset.id,
+        { assetNumber: asset.assetNumber, name, purchaseCost: purchaseCostValue, fundingAccount: fundingAccountCode },
+        request.headers.get('x-forwarded-for') || undefined,
+        request.headers.get('user-agent') || undefined
+      );
+
+      const depreciationSchedules = await (prisma as any).depreciationSchedule.findMany({
+        where: { fixedAssetId: asset.id },
+        orderBy: { period: 'asc' },
+      });
+
+      return {
+        status: 200,
+        body: {
+          success: true,
+          data: { asset, depreciationSchedules, journalEntryId: journalEntry.id },
+          message: 'Fixed asset created successfully',
+        },
+      };
     });
 
-    return apiSuccess({ asset, depreciationSchedules, journalEntryId: journalEntry.id }, 'Fixed asset created successfully');
+    return apiSuccess(result.body.data, result.body.message);
   } catch (error) {
     return handleApiError(error, 'Create fixed asset');
   }

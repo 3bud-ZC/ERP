@@ -9,6 +9,8 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const PRISMA_SCHEMA = path.join(REPO_ROOT, 'prisma', 'schema.prisma');
 const ACCOUNTING_SOURCE = path.join(REPO_ROOT, 'lib', 'accounting.ts');
 const CODE_SEQUENCE_SOURCE = path.join(REPO_ROOT, 'lib', 'code-sequence.service.ts');
+const FIXED_ASSETS_ROUTE = path.join(REPO_ROOT, 'app', 'api', 'fixed-assets', 'route.ts');
+const FIXED_ASSETS_PANEL = path.join(REPO_ROOT, 'components', 'accounting', 'FixedAssetsPanel.tsx');
 
 describe('fixed asset numbering helpers', () => {
   it('increments the tenant-local sequence', () => {
@@ -59,5 +61,20 @@ describe('unique constraint messages', () => {
     expect(getUniqueConstraintMessage({ meta: { target: ['entryNumber'] } })).toBe('رقم القيد مستخدم بالفعل');
     expect(getUniqueConstraintMessage({ meta: { target: ['assetNumber'] } })).toBe('رقم الأصل مستخدم بالفعل');
     expect(getUniqueConstraintMessage({ meta: { target: ['email'] } })).toBe('البريد الإلكتروني مستخدم بالفعل');
+  });
+});
+
+describe('fixed asset submission contract', () => {
+  it('uses server-side idempotency for create requests', () => {
+    const source = fs.readFileSync(FIXED_ASSETS_ROUTE, 'utf8');
+    expect(source).toContain("import { withIdempotency } from '@/lib/middleware/idempotency';");
+    expect(source).toContain('await withIdempotency(request, user.tenantId!, user.id, async () => {');
+  });
+
+  it('uses a synchronous client-side submit lock with an idempotency key', () => {
+    const source = fs.readFileSync(FIXED_ASSETS_PANEL, 'utf8');
+    expect(source).toContain('const submitLockRef = useRef<string | null>(null);');
+    expect(source).toContain('if (submitLockRef.current) return;');
+    expect(source).toContain("'Idempotency-Key': idempotencyKey");
   });
 });
