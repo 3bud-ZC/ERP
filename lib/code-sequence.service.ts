@@ -58,6 +58,10 @@ const MAX_UNIQUE_RETRIES = 500;
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
+function usesGlobalUniqueNamespace(entityKey: CodeEntityKey): boolean {
+  return entityKey === CODE_ENTITY_KEYS.JOURNAL_ENTRY;
+}
+
 export function formatEntityCode(prefix: string, year: number, sequence: number): string {
   return `${prefix}-${year}-${String(sequence).padStart(SEQ_PAD, '0')}`;
 }
@@ -226,15 +230,22 @@ async function ensureSequenceRow(
   entityKey: CodeEntityKey,
   year: number,
 ): Promise<void> {
-  const existing = await client.codeSequence.findUnique({
-    where: { tenantId_entityKey_year: { tenantId, entityKey, year } },
-  });
-  if (existing) return;
+  const uniqueKey = { tenantId_entityKey_year: { tenantId, entityKey, year } } as const;
+  const existing = await client.codeSequence.findUnique({ where: uniqueKey });
+  if (existing && !usesGlobalUniqueNamespace(entityKey)) return;
 
   const floor = await computeSequenceFloor(client, tenantId, entityKey, year);
-  await client.codeSequence.create({
-    data: { tenantId, entityKey, year, lastValue: floor },
-  });
+  if (existing) {
+    if (existing.lastValue < floor) {
+      await client.codeSequence.update({
+        where: uniqueKey,
+        data: { lastValue: floor },
+      });
+    }
+    return;
+  }
+
+  await client.codeSequence.create({ data: { tenantId, entityKey, year, lastValue: floor } });
 }
 
 /**

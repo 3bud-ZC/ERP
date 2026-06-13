@@ -6,6 +6,21 @@
 import { NextResponse } from 'next/server';
 import { toArabicError } from '@/lib/utils/arabic-errors';
 
+export function getUniqueConstraintMessage(error: any): string {
+  const target = Array.isArray(error?.meta?.target)
+    ? error.meta.target.join(',')
+    : String(error?.meta?.target || '');
+
+  if (target.includes('assetNumber')) return 'رقم الأصل مستخدم بالفعل';
+  if (target.includes('entryNumber')) return 'رقم القيد مستخدم بالفعل';
+  if (target.includes('invoiceNumber')) return 'رقم الفاتورة مستخدم بالفعل';
+  if (target.includes('orderNumber')) return 'رقم الطلب مستخدم بالفعل';
+  if (target.includes('email')) return 'البريد الإلكتروني مستخدم بالفعل';
+  if (target.includes('code')) return 'هذا الكود مستخدم بالفعل';
+
+  return 'هذا العنصر موجود بالفعل';
+}
+
 export function apiOnboardingRequired() {
   return NextResponse.json(
     { success: false, message: 'يجب إكمال إعداد النظام أولاً', code: 428, onboardingRequired: true },
@@ -78,7 +93,7 @@ export function handleApiError(error: any, context: string = 'Operation'): NextR
 
   // Prisma unique constraint violation
   if (error.code === 'P2002') {
-    return apiError('هذا العنصر موجود بالفعل', 409);
+    return apiError(getUniqueConstraintMessage(error), 409);
   }
 
   // Prisma record not found

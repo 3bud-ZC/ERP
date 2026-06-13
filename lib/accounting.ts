@@ -133,38 +133,49 @@ export async function createJournalEntry(entry: JournalEntryInput, createdBy?: s
     if (!tenantId) {
       throw new Error('tenantId is required on journal entry');
     }
-    const entryNumber = await generateEntryNumber(tenantId);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const entryNumber = await generateEntryNumber(tenantId);
 
-    // Create journal entry with lines in transaction
-    const journalEntry = await prisma.journalEntry.create({
-      // @ts-ignore - TODO: Fix tenant relation type issue
-      data: {
-        entryNumber,
-        entryDate: entry.entryDate,
-        description: entry.description,
-        referenceType: entry.referenceType,
-        referenceId: entry.referenceId,
-        tenantId: entry.tenantId || 'default',
-        totalDebit,
-        totalCredit,
-        isPosted: false,
-        lines: {
-          create: entry.lines.map((line: any) => ({
-            ...line,
+      try {
+        // Create journal entry with lines in transaction
+        const journalEntry = await prisma.journalEntry.create({
+          // @ts-ignore - TODO: Fix tenant relation type issue
+          data: {
+            entryNumber,
+            entryDate: entry.entryDate,
+            description: entry.description,
+            referenceType: entry.referenceType,
+            referenceId: entry.referenceId,
             tenantId: entry.tenantId || 'default',
-          })),
-        },
-      },
-      include: {
-        lines: {
-          include: {
-            account: true,
+            totalDebit,
+            totalCredit,
+            isPosted: false,
+            lines: {
+              create: entry.lines.map((line: any) => ({
+                ...line,
+                tenantId: entry.tenantId || 'default',
+              })),
+            },
           },
-        },
-      },
-    });
+          include: {
+            lines: {
+              include: {
+                account: true,
+              },
+            },
+          },
+        });
 
-    return journalEntry;
+        return journalEntry;
+      } catch (error: any) {
+        if (error?.code === 'P2002' && attempt < 2) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error('تعذر إنشاء رقم قيد يومية فريد، حاول مرة أخرى');
   } catch (error) {
     console.error('Error creating journal entry:', error);
     throw error;
