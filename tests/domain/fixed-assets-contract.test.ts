@@ -71,6 +71,13 @@ describe('fixed asset submission contract', () => {
     expect(source).toContain('await withIdempotency(request, user.tenantId!, user.id, async () => {');
   });
 
+  it('does not fail the request after a successful create because of workflow sync or response refetch data', () => {
+    const source = fs.readFileSync(FIXED_ASSETS_ROUTE, 'utf8');
+    expect(source).toContain('const depreciationSchedules = await recreateDepreciationSchedules({');
+    expect(source).toContain('Fixed asset workflow sync failed after successful creation:');
+    expect(source).not.toContain("const depreciationSchedules = await (prisma as any).depreciationSchedule.findMany({");
+  });
+
   it('uses a synchronous client-side submit lock with an idempotency key', () => {
     const source = fs.readFileSync(FIXED_ASSETS_PANEL, 'utf8');
     expect(source).toContain('const submitLockRef = useRef<string | null>(null);');

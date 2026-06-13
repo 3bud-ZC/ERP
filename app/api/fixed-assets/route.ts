@@ -178,6 +178,8 @@ async function recreateDepreciationSchedules(params: {
   await (prisma as any).depreciationSchedule.createMany({
     data: depreciationScheduleRows,
   });
+
+  return depreciationScheduleRows;
 }
 
 async function createFixedAssetRecord(params: {
@@ -351,7 +353,7 @@ export async function POST(request: Request) {
         netBookValue,
       });
 
-      await recreateDepreciationSchedules({
+      const depreciationSchedules = await recreateDepreciationSchedules({
         fixedAssetId: asset.id,
         purchaseDate: purchaseDateValue,
         purchaseCost: purchaseCostValue,
@@ -377,7 +379,14 @@ export async function POST(request: Request) {
         throw journalError;
       }
 
-      await ensureWorkflowTransition('FixedAsset', asset.id, 'active', user.id, { purchaseCost: purchaseCostValue, usefulLife: usefulLifeValue });
+      try {
+        await ensureWorkflowTransition('FixedAsset', asset.id, 'active', user.id, {
+          purchaseCost: purchaseCostValue,
+          usefulLife: usefulLifeValue,
+        });
+      } catch (workflowError) {
+        console.error('Fixed asset workflow sync failed after successful creation:', workflowError);
+      }
 
       await logAuditAction(
         user.id, 'CREATE', 'accounting', 'FixedAsset', asset.id,
@@ -385,11 +394,6 @@ export async function POST(request: Request) {
         request.headers.get('x-forwarded-for') || undefined,
         request.headers.get('user-agent') || undefined
       );
-
-      const depreciationSchedules = await (prisma as any).depreciationSchedule.findMany({
-        where: { fixedAssetId: asset.id },
-        orderBy: { period: 'asc' },
-      });
 
       return {
         status: 200,
