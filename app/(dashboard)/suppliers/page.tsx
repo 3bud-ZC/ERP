@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGetList } from '@/lib/api/fetcher';
 import { matchesEntitySearch } from '@/lib/api/safe-array';
 import { queryKeys } from '@/lib/api/query-keys';
-import { Plus, X, Pencil, Trash2, FileText, AlertCircle, Search, Truck } from 'lucide-react';
+import { Plus, X, Pencil, Trash2, FileText, AlertCircle, Search, Truck, Wallet } from 'lucide-react';
 import Link from 'next/link';
 import { TableSkeleton, EmptyState, ErrorBanner, Toast, useToast } from '@/components/ui/patterns';
 import { ServicesLayout } from '@/components/services/ServicesLayout';
@@ -118,6 +118,7 @@ export default function SuppliersPage() {
                 <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500">الهاتف</th>
                 <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500">البريد الإلكتروني</th>
                 <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500">حد الائتمان</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500">الرصيد</th>
                 <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500">إجراءات</th>
               </tr>
             </thead>
@@ -132,11 +133,20 @@ export default function SuppliersPage() {
                   <td className="px-5 py-3 text-sm text-slate-500">{s.phone ?? '—'}</td>
                   <td className="px-5 py-3 text-sm text-slate-500">{s.email ?? '—'}</td>
                   <td className="px-5 py-3 text-sm text-slate-600 text-left tabular-nums">{fmtEGP(s.creditLimit)}</td>
+                  <td className="px-5 py-3 text-sm text-left tabular-nums">
+                    <span className={s.balance != null && s.balance > 0 ? 'text-orange-600 font-medium' : 'text-slate-600'}>
+                      {fmtEGP(s.balance)}
+                    </span>
+                  </td>
                   <td className="px-5 py-3">
                     <div className="flex items-center justify-center gap-1">
                       <Link href={`/invoices/purchases?supplier=${encodeURIComponent(s.nameAr)}`}
                         className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="فواتير المورد">
                         <FileText className="w-4 h-4" />
+                      </Link>
+                      <Link href={`/suppliers/${s.id}`}
+                        className="p-1.5 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors" title="تفاصيل المديونية">
+                        <Wallet className="w-4 h-4" />
                       </Link>
                       <Link href={`/suppliers/${s.id}/edit`}
                         className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors" title="تعديل">

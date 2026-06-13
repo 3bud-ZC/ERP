@@ -395,6 +395,29 @@ export const productionWorkflow: WorkflowDefinition = {
   },
 };
 
+// ==================== FIXED ASSET WORKFLOW ====================
+
+export const fixedAssetWorkflow: WorkflowDefinition = {
+  name: 'FixedAssetWorkflow',
+  initial: 'active',
+  states: {
+    active: {
+      value: 'active',
+      label: 'Active',
+      canTransitionTo: ['disposed'],
+    },
+    disposed: {
+      value: 'disposed',
+      label: 'Disposed',
+      canTransitionTo: [],
+    },
+  },
+  transitions: {
+    active: ['disposed'],
+    disposed: [],
+  },
+};
+
 // ==================== STATE TRANSITION VALIDATION ====================
 
 export interface TransitionValidation {
@@ -431,6 +454,7 @@ export const workflowDefinitions = {
   PurchaseWorkflow: purchaseWorkflow,
   InventoryWorkflow: inventoryWorkflow,
   ProductionWorkflow: productionWorkflow,
+  FixedAssetWorkflow: fixedAssetWorkflow,
 };
 
 export function getWorkflow(name: string): WorkflowDefinition | undefined {

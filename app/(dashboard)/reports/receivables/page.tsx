@@ -13,6 +13,9 @@ import {
 
 interface Row {
   invoiceId: string;
+  rowType?: string;
+  statement?: string;
+  reference?: string;
   invoiceNumber: string;
   invoiceDate?: string;
   customer: { code: string; nameAr: string };
@@ -43,7 +46,7 @@ const defaultSummary: Summary = {
 export default function ReceivablesReportPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [summary, setSummary] = useState<Summary>(defaultSummary);
-  const [filters, setFilters] = useState({ from: '', to: '', status: 'open' });
+  const [filters, setFilters] = useState({ from: '', to: '', status: 'all' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,7 +95,7 @@ export default function ReceivablesReportPage() {
     <ReportsLayout title="تقرير مديونيات العملاء" subtitle={subtitle}>
       <ReportShell
         title="تقرير مديونيات العملاء"
-        subtitle="تحليل الفواتير المفتوحة والمدفوعات حسب العميل"
+        subtitle="يشمل الرصيد الافتتاحي والفواتير المفتوحة والتحصيلات المباشرة حسب العميل"
         periodLabel={periodLabel}
         exportConfig={{ report: 'receivables', params: { fromDate: filters.from, toDate: filters.to, status: filters.status } }}
         loading={loading}
@@ -124,8 +127,8 @@ export default function ReceivablesReportPage() {
                 onChange={(e) => setFilters({ ...filters, status: e.target.value })}
                 className={reportInputCls}
               >
-                <option value="open">مفتوحة</option>
                 <option value="all">كل الحالات</option>
+                <option value="open">مفتوحة</option>
                 <option value="unpaid">غير مدفوعة</option>
                 <option value="partial">مدفوعة جزئيًا</option>
                 <option value="paid">مدفوعة</option>
@@ -148,7 +151,7 @@ export default function ReceivablesReportPage() {
         }
       >
         <div className="grid gap-3 md:grid-cols-5">
-          <ReportSummaryCard label="إجمالي الفواتير" value={summary.invoiceCount.toString()} />
+          <ReportSummaryCard label="إجمالي البنود" value={summary.invoiceCount.toString()} />
           <ReportSummaryCard label="إجمالي قيمة الفواتير" value={fmtMoneyEGP(summary.totalInvoices)} />
           <ReportSummaryCard label="إجمالي المدفوع" value={fmtMoneyEGP(summary.totalPaid)} />
           <ReportSummaryCard label="إجمالي المتبقي" value={fmtMoneyEGP(summary.totalRemaining)} accent="bg-red-50 border-red-200" />
@@ -160,8 +163,9 @@ export default function ReceivablesReportPage() {
             <thead className="bg-slate-50 text-slate-500">
               <tr>
                 <th className="px-4 py-3 text-right">العميل</th>
-                <th className="px-4 py-3 text-right">الفاتورة</th>
-                <th className="px-4 py-3 text-right">تاريخ الفاتورة</th>
+                <th className="px-4 py-3 text-right">البيان</th>
+                <th className="px-4 py-3 text-right">المرجع</th>
+                <th className="px-4 py-3 text-right">التاريخ</th>
                 <th className="px-4 py-3 text-right">الاستحقاق</th>
                 <th className="px-4 py-3 text-right">الإجمالي</th>
                 <th className="px-4 py-3 text-right">المدفوع</th>
@@ -172,19 +176,33 @@ export default function ReceivablesReportPage() {
             <tbody className="divide-y divide-slate-100">
               {!loading && rows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                     لا توجد مديونيات مطابقة للفلاتر الحالية.
                   </td>
                 </tr>
               ) : rows.map((r) => (
                 <tr key={r.invoiceId} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-semibold">{r.customer.nameAr}</td>
-                  <td className="px-4 py-3">{r.invoiceNumber}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col gap-1">
+                      <span>{r.statement || 'فاتورة'}</span>
+                      <span className={`inline-flex w-fit rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        r.rowType === 'settlement'
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : r.rowType === 'opening_balance'
+                            ? 'bg-amber-50 text-amber-700'
+                            : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {r.rowType === 'settlement' ? 'حركة تحصيل/تسوية' : r.rowType === 'opening_balance' ? 'رصيد افتتاحي' : 'فاتورة'}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">{r.reference || r.invoiceNumber}</td>
                   <td className="px-4 py-3">{formatDate(r.invoiceDate)}</td>
                   <td className="px-4 py-3">{formatDate(r.dueDate)}</td>
                   <td className="px-4 py-3">{fmtMoneyEGP(r.total)}</td>
                   <td className="px-4 py-3">{fmtMoneyEGP(r.paid)}</td>
-                  <td className="px-4 py-3 font-bold text-red-700">{fmtMoneyEGP(r.remaining)}</td>
+                  <td className={`px-4 py-3 font-bold ${r.remaining >= 0 ? 'text-red-700' : 'text-emerald-700'}`}>{fmtMoneyEGP(r.remaining)}</td>
                   <td className="px-4 py-3">{r.overdueDays}</td>
                 </tr>
               ))}

@@ -77,6 +77,8 @@ export enum DomainEventType {
   ProductionOrderStarted = 'ProductionOrderStarted',
   ProductionOrderCompleted = 'ProductionOrderCompleted',
   ProductionOrderCancelled = 'ProductionOrderCancelled',
+
+  FixedAssetDisposed = 'FixedAssetDisposed',
 }
 
 // ==================== DOMAIN EVENT ====================
@@ -146,6 +148,15 @@ class WorkflowEngine {
    */
   async transition(request: TransitionRequest): Promise<TransitionResult> {
     const { workflowName, entityType, entityId, from, to, userId, data, skipValidation } = request;
+
+    if (from === to) {
+      return {
+        success: true,
+        from,
+        to,
+        warnings: ['Entity is already in the requested state'],
+      };
+    }
 
     // Get workflow definition
     const workflow = getWorkflow(workflowName);
@@ -236,6 +247,7 @@ class WorkflowEngine {
       StockAdjustment: 'status',
       StockTransfer: 'status',
       ProductionOrder: 'status',
+      FixedAsset: 'status',
     };
 
     const stateField = stateFieldMap[entityType];
@@ -334,6 +346,9 @@ class WorkflowEngine {
       'ProductionWorkflow:planned:scheduled': DomainEventType.ProductionOrderScheduled,
       'ProductionWorkflow:scheduled:in_progress': DomainEventType.ProductionOrderStarted,
       'ProductionWorkflow:in_progress:completed': DomainEventType.ProductionOrderCompleted,
+
+      // Fixed asset workflow
+      'FixedAssetWorkflow:active:disposed': DomainEventType.FixedAssetDisposed,
     };
 
     return eventTypeMap[transitionKey] || DomainEventType.QuotationCreated; // Default
@@ -403,6 +418,7 @@ class WorkflowEngine {
       StockAdjustment: 'status',
       StockTransfer: 'status',
       ProductionOrder: 'status',
+      FixedAsset: 'status',
     };
 
     const stateField = stateFieldMap[entityType];

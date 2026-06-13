@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Final HTTPS + SSL activation for erp-abud.com
+# Final HTTPS + SSL activation for erp.abud.fun
 set -euo pipefail
 
-DOMAIN="erp-abud.com"
-WWW="www.erp-abud.com"
-TARGET_IP="159.223.167.220"
+DOMAIN="erp.abud.fun"
+WWW="www.erp.abud.fun"
+TARGET_IP="167.99.157.6"
 ERP_DIR="/var/www/erp"
-EMAIL="${CERTBOT_EMAIL:-admin@erp-abud.com}"
+EMAIL="${CERTBOT_EMAIL:-admin@erp.abud.fun}"
 LOG="/tmp/erp-ssl-activate-$(date +%Y%m%d_%H%M%S).log"
 
 exec > >(tee -a "$LOG") 2>&1

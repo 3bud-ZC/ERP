@@ -1,10 +1,12 @@
-import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiSuccess, handleApiError, apiError } from '@/lib/api-response';
 import { getAuthenticatedUser, checkPermission, logAuditAction } from '@/lib/auth';
 import { createJournalEntry, postJournalEntry } from '@/lib/accounting';
+import { reverseAllJournalEntriesForReferenceId } from '@/lib/services/journal-reversal.service';
 import { transitionEntity } from '@/lib/workflow-engine';
 import { registerAllEventHandlers } from '@/lib/event-handlers';
+import { getNextFixedAssetNumber } from '@/lib/fixed-assets';
+import { withIdempotency } from '@/lib/middleware/idempotency';
 
 // Register event handlers on module load
 registerAllEventHandlers();
@@ -12,6 +14,237 @@ registerAllEventHandlers();
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const DEFAULT_USEFUL_LIFE = 60;
+const DEFAULT_SALVAGE_VALUE = 0;
+
+type AccountLite = {
+  code: string;
+  nameAr: string;
+  type: string;
+  subType?: string | null;
+};
+
+function normalizeCategory(value: unknown) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['machines', 'furniture', 'devices', 'vehicles', 'other'].includes(normalized)) return normalized;
+  return 'other';
+}
+
+function categoryLabel(category: string) {
+  switch (category) {
+    case 'machines': return 'الآلات';
+    case 'furniture': return 'الأثاث';
+    case 'devices': return 'الأجهزة';
+    case 'vehicles': return 'السيارات';
+    default: return 'أصول أخرى';
+  }
+}
+
+function buildAssetDescription(category: string, notes?: string | null) {
+  return [
+    `تصنيف الأصل: ${categoryLabel(category)}`,
+    notes?.trim() ? `ملاحظات: ${notes.trim()}` : null,
+  ].filter(Boolean).join('\n');
+}
+
+function parseNotesFromDescription(description?: string | null) {
+  if (!description) return '';
+  const line = description.split('\n').find((item) => item.startsWith('ملاحظات:'));
+  return line ? line.replace('ملاحظات:', '').trim() : '';
+}
+
+function pickFixedAssetAccount(accounts: AccountLite[]) {
+  const preferred = accounts.find((account) => String(account.subType || '').toLowerCase().includes('fixed'))
+    || accounts.find((account) => ['1040', '1400'].includes(account.code))
+    || accounts.find((account) => String(account.nameAr || '').includes('أصول ثابتة'))
+    || accounts.find((account) => {
+      const subtype = String(account.subType || '').toLowerCase();
+      return !['cash', 'bank', 'receivable', 'inventory', 'wip', 'header'].includes(subtype);
+    });
+  return preferred?.code || null;
+}
+
+function pickFundingAccount(accounts: AccountLite[], assetAccountCode: string) {
+  const filtered = accounts.filter((account) => account.code !== assetAccountCode);
+  const preferred = filtered.find((account) => String(account.subType || '').toLowerCase() === 'bank')
+    || filtered.find((account) => ['1010', '1110'].includes(account.code))
+    || filtered.find((account) => String(account.subType || '').toLowerCase() === 'cash')
+    || filtered.find((account) => ['1001', '1100'].includes(account.code))
+    || filtered.find((account) => {
+      const type = String(account.type || '').toLowerCase();
+      const subtype = String(account.subType || '').toLowerCase();
+      return ['asset', 'liability', 'equity'].includes(type) && subtype !== 'header';
+    });
+  return preferred?.code || null;
+}
+
+async function resolveAssetAccounts(tenantId: string, accountCode?: string | null, creditAccountCode?: string | null) {
+  const accounts = await prisma.account.findMany({
+    where: { tenantId, isActive: true },
+    select: { code: true, nameAr: true, type: true, subType: true },
+    orderBy: { code: 'asc' },
+  });
+
+  const assetCandidates = accounts.filter((account) => String(account.type || '').toLowerCase() === 'asset');
+  const fundingCandidates = accounts.filter((account) => {
+    const type = String(account.type || '').toLowerCase();
+    const subtype = String(account.subType || '').toLowerCase();
+    return ['asset', 'liability', 'equity'].includes(type) && subtype !== 'header';
+  });
+
+  const resolvedAssetAccountCode = accountCode || pickFixedAssetAccount(assetCandidates);
+  if (!resolvedAssetAccountCode) {
+    throw new Error('تعذر تحديد حساب أصل ثابت مناسب لهذا الكيان');
+  }
+
+  const resolvedFundingAccountCode = creditAccountCode || pickFundingAccount(fundingCandidates, resolvedAssetAccountCode);
+  if (!resolvedFundingAccountCode) {
+    throw new Error('تعذر تحديد حساب تمويل مناسب لهذا الكيان');
+  }
+
+  return {
+    assetAccountCode: resolvedAssetAccountCode,
+    fundingAccountCode: resolvedFundingAccountCode,
+  };
+}
+
+async function createFixedAssetJournalEntry(params: {
+  assetId: string;
+  assetNumber: string;
+  tenantId: string;
+  userId: string;
+  name: string;
+  accountCode: string;
+  creditAccountCode: string;
+  purchaseDate: Date;
+  purchaseCost: number;
+}) {
+  const journalEntry = await createJournalEntry({
+    entryDate: params.purchaseDate,
+    description: `Purchase of fixed asset ${params.assetNumber} - ${params.name}`,
+    referenceType: 'FixedAsset',
+    referenceId: params.assetId,
+    tenantId: params.tenantId,
+    lines: [
+      {
+        accountCode: params.accountCode,
+        debit: params.purchaseCost,
+        credit: 0,
+        description: `Fixed asset ${params.name}`,
+      },
+      {
+        accountCode: params.creditAccountCode,
+        debit: 0,
+        credit: params.purchaseCost,
+        description: `Funding for fixed asset ${params.name}`,
+      },
+    ],
+  }, params.userId);
+
+  await postJournalEntry(journalEntry.id, params.userId);
+  return journalEntry;
+}
+
+async function recreateDepreciationSchedules(params: {
+  fixedAssetId: string;
+  purchaseDate: Date;
+  purchaseCost: number;
+  usefulLife: number;
+  salvageValue: number;
+}) {
+  await (prisma as any).depreciationSchedule.deleteMany({
+    where: { fixedAssetId: params.fixedAssetId, posted: false },
+  });
+
+  const monthlyDepreciation = (params.purchaseCost - params.salvageValue) / params.usefulLife;
+  const depreciationScheduleRows = Array.from({ length: params.usefulLife }, (_, index) => {
+    const periodDate = new Date(params.purchaseDate);
+    periodDate.setMonth(periodDate.getMonth() + index);
+    const period = `${periodDate.getFullYear()}-${String(periodDate.getMonth() + 1).padStart(2, '0')}`;
+    const accumulatedDepreciation = monthlyDepreciation * (index + 1);
+    const currentNetBookValue = params.purchaseCost - accumulatedDepreciation;
+
+    return {
+      fixedAssetId: params.fixedAssetId,
+      period,
+      depreciationAmount: monthlyDepreciation,
+      accumulatedDepreciation,
+      netBookValue: Math.max(0, currentNetBookValue),
+      posted: false,
+    };
+  });
+
+  await (prisma as any).depreciationSchedule.createMany({
+    data: depreciationScheduleRows,
+  });
+
+  return depreciationScheduleRows;
+}
+
+async function createFixedAssetRecord(params: {
+  tenantId: string;
+  name: string;
+  description: string;
+  accountCode: string;
+  purchaseDate: Date;
+  purchaseCost: number;
+  usefulLife: number;
+  salvageValue: number;
+  depreciationMethod: string;
+  netBookValue: number;
+}) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const lastAsset = await (prisma as any).fixedAsset.findFirst({
+      where: { tenantId: params.tenantId },
+      orderBy: { assetNumber: 'desc' },
+      select: { assetNumber: true },
+    });
+    const assetNumber = getNextFixedAssetNumber(lastAsset?.assetNumber);
+
+    try {
+      const asset = await (prisma as any).fixedAsset.create({
+        data: {
+          assetNumber,
+          name: params.name,
+          description: params.description,
+          accountCode: params.accountCode,
+          purchaseDate: params.purchaseDate,
+          purchaseCost: params.purchaseCost,
+          usefulLife: params.usefulLife,
+          salvageValue: params.salvageValue,
+          depreciationMethod: params.depreciationMethod,
+          accumulatedDepreciation: 0,
+          netBookValue: params.netBookValue,
+          status: 'active',
+          tenantId: params.tenantId,
+        },
+      });
+
+      return { asset, assetNumber };
+    } catch (error: any) {
+      if (error?.code === 'P2002' && attempt < 2) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error('تعذر إنشاء رقم أصل ثابت فريد، حاول مرة أخرى');
+}
+
+async function ensureWorkflowTransition(
+  entityType: string,
+  entityId: string,
+  targetState: string,
+  userId: string,
+  data?: Record<string, unknown>,
+) {
+  const result = await transitionEntity(entityType, entityId, targetState, userId, data);
+  if (!result.success) {
+    throw new Error(result.error || `تعذر تحديث دورة العمل للكيان ${entityType}`);
+  }
+}
 
 // GET - Read fixed assets
 export async function GET(request: Request) {
@@ -26,7 +259,7 @@ export async function GET(request: Request) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') ?? '50', 10)));
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const where: any = { tenantId: user.tenantId };
     if (status) where.status = status;
 
     const [data, total] = await Promise.all([
@@ -57,114 +290,122 @@ export async function POST(request: Request) {
     if (!user) return apiError('لم يتم المصادقة', 401);
     if (!checkPermission(user, 'manage_accounting')) return apiError('ليس لديك صلاحية', 403);
 
-    const body = await request.json();
-    const { name, description, accountCode, purchaseDate, purchaseCost, usefulLife, salvageValue, depreciationMethod } = body;
-
-    if (!name || !accountCode || !purchaseDate || !purchaseCost || !usefulLife) {
-      return apiError('Name, account code, purchase date, purchase cost, and useful life are required', 400);
-    }
-
-    // Validate account
-    const account = await prisma.account.findUnique({
-      where: { tenantId_code: { tenantId: user.tenantId!, code: accountCode } },
-    });
-
-    if (!account) {
-      return apiError('Account not found', 400);
-    }
-
-    // Generate asset number
-    const lastAsset = await (prisma as any).fixedAsset.findFirst({
-      orderBy: { assetNumber: 'desc' },
-    });
-    const nextNumber = lastAsset ? parseInt(lastAsset.assetNumber.slice(3)) + 1 : 1;
-    const assetNumber = `FA-${String(nextNumber).padStart(6, '0')}`;
-
-    // Calculate initial net book value
-    const netBookValue = purchaseCost - (salvageValue || 0);
-
-    // Create fixed asset
-    const asset = await (prisma as any).fixedAsset.create({
-      data: {
-        assetNumber,
+    const result = await withIdempotency(request, user.tenantId!, user.id, async () => {
+      const body = await request.json();
+      const {
         name,
         description,
+        category,
+        notes,
         accountCode,
-        purchaseDate: new Date(purchaseDate),
+        creditAccountCode,
+        purchaseDate,
         purchaseCost,
-        usefulLife: parseInt(usefulLife),
-        salvageValue: salvageValue || 0,
+        usefulLife,
+        salvageValue,
+        depreciationMethod,
+      } = body;
+
+      if (!name || !purchaseDate || !purchaseCost) {
+        throw new Error('الاسم والتاريخ والقيمة مطلوبة');
+      }
+
+      const purchaseCostValue = Number(purchaseCost);
+      const usefulLifeValue = parseInt(String(usefulLife || DEFAULT_USEFUL_LIFE), 10);
+      const salvageValueValue = Number(salvageValue ?? DEFAULT_SALVAGE_VALUE);
+      const normalizedCategory = normalizeCategory(category);
+      if (!Number.isFinite(purchaseCostValue) || purchaseCostValue <= 0) {
+        throw new Error('قيمة الأصل يجب أن تكون أكبر من صفر');
+      }
+      if (!Number.isFinite(usefulLifeValue) || usefulLifeValue <= 0) {
+        throw new Error('Useful life must be greater than zero');
+      }
+      if (!Number.isFinite(salvageValueValue) || salvageValueValue < 0) {
+        throw new Error('Salvage value must be zero or greater');
+      }
+      if (salvageValueValue > purchaseCostValue) {
+        throw new Error('Salvage value cannot exceed purchase cost');
+      }
+
+      const { assetAccountCode, fundingAccountCode } = await resolveAssetAccounts(
+        user.tenantId!,
+        accountCode,
+        creditAccountCode,
+      );
+      if (fundingAccountCode === assetAccountCode) {
+        throw new Error('الحساب المقابل يجب أن يكون مختلفًا عن حساب الأصل');
+      }
+
+      const netBookValue = purchaseCostValue - salvageValueValue;
+      const purchaseDateValue = new Date(purchaseDate);
+      const assetDescription = description || buildAssetDescription(normalizedCategory, notes);
+
+      const { asset, assetNumber } = await createFixedAssetRecord({
+        tenantId: user.tenantId!,
+        name,
+        description: assetDescription,
+        accountCode: assetAccountCode,
+        purchaseDate: purchaseDateValue,
+        purchaseCost: purchaseCostValue,
+        usefulLife: usefulLifeValue,
+        salvageValue: salvageValueValue,
         depreciationMethod: depreciationMethod || 'straight_line',
-        accumulatedDepreciation: 0,
         netBookValue,
-        status: 'active',
-        tenantId: user.tenantId,
-      },
-    });
-
-    // Create journal entry for asset purchase
-    const journalEntry = await createJournalEntry({
-      entryDate: new Date(purchaseDate),
-      description: `Purchase of fixed asset ${assetNumber} - ${name}`,
-      referenceType: 'FixedAsset',
-      referenceId: asset.id,
-      lines: [
-        {
-          accountCode: accountCode, // Fixed asset account
-          debit: purchaseCost,
-          credit: 0,
-          description: `Fixed asset ${name}`,
-        },
-        {
-          accountCode: '1010', // Cash or accounts payable
-          debit: 0,
-          credit: purchaseCost,
-          description: `Payment for fixed asset ${name}`,
-        },
-      ],
-    }, user.id);
-
-    await postJournalEntry(journalEntry.id, user.id);
-
-    // Generate depreciation schedule
-    const depreciationSchedules = [];
-    const monthlyDepreciation = (purchaseCost - (salvageValue || 0)) / (parseInt(usefulLife));
-    let accumulatedDepreciation = 0;
-
-    for (let i = 0; i < parseInt(usefulLife); i++) {
-      const periodDate = new Date(purchaseDate);
-      periodDate.setMonth(periodDate.getMonth() + i);
-      const period = `${periodDate.getFullYear()}-${String(periodDate.getMonth() + 1).padStart(2, '0')}`;
-
-      accumulatedDepreciation += monthlyDepreciation;
-      const currentNetBookValue = purchaseCost - accumulatedDepreciation;
-
-      const schedule = await (prisma as any).depreciationSchedule.create({
-        data: {
-          fixedAssetId: asset.id,
-          period,
-          depreciationAmount: monthlyDepreciation,
-          accumulatedDepreciation,
-          netBookValue: Math.max(0, currentNetBookValue),
-          posted: false,
-        },
       });
 
-      depreciationSchedules.push(schedule);
-    }
+      const depreciationSchedules = await recreateDepreciationSchedules({
+        fixedAssetId: asset.id,
+        purchaseDate: purchaseDateValue,
+        purchaseCost: purchaseCostValue,
+        usefulLife: usefulLifeValue,
+        salvageValue: salvageValueValue,
+      });
 
-    // Trigger workflow transition
-    await transitionEntity('FixedAsset', asset.id, 'active', user.id, { purchaseCost, usefulLife });
+      let journalEntry;
+      try {
+        journalEntry = await createFixedAssetJournalEntry({
+          assetId: asset.id,
+          assetNumber,
+          tenantId: user.tenantId!,
+          userId: user.id,
+          name,
+          accountCode: assetAccountCode,
+          creditAccountCode: fundingAccountCode,
+          purchaseDate: purchaseDateValue,
+          purchaseCost: purchaseCostValue,
+        });
+      } catch (journalError) {
+        await (prisma as any).fixedAsset.delete({ where: { id: asset.id } });
+        throw journalError;
+      }
 
-    // Audit logging
-    await logAuditAction(
-      user.id, 'CREATE', 'accounting', 'FixedAsset', asset.id,
-      { assetNumber: asset.assetNumber, name, purchaseCost },
-      request.headers.get('x-forwarded-for') || undefined,
-      request.headers.get('user-agent') || undefined
-    );
+      try {
+        await ensureWorkflowTransition('FixedAsset', asset.id, 'active', user.id, {
+          purchaseCost: purchaseCostValue,
+          usefulLife: usefulLifeValue,
+        });
+      } catch (workflowError) {
+        console.error('Fixed asset workflow sync failed after successful creation:', workflowError);
+      }
 
-    return apiSuccess({ asset, depreciationSchedules }, 'Fixed asset created successfully');
+      await logAuditAction(
+        user.id, 'CREATE', 'accounting', 'FixedAsset', asset.id,
+        { assetNumber: asset.assetNumber, name, purchaseCost: purchaseCostValue, fundingAccount: fundingAccountCode },
+        request.headers.get('x-forwarded-for') || undefined,
+        request.headers.get('user-agent') || undefined
+      );
+
+      return {
+        status: 200,
+        body: {
+          success: true,
+          data: { asset, depreciationSchedules, journalEntryId: journalEntry.id },
+          message: 'Fixed asset created successfully',
+        },
+      };
+    });
+
+    return apiSuccess(result.body.data, result.body.message);
   } catch (error) {
     return handleApiError(error, 'Create fixed asset');
   }
@@ -178,15 +419,15 @@ export async function PUT(request: Request) {
     if (!checkPermission(user, 'manage_accounting')) return apiError('ليس لديك صلاحية', 403);
 
     const body = await request.json();
-    const { id, status, description } = body;
+    const { id, status, description, name, category, notes, purchaseDate, purchaseCost, usefulLife, salvageValue, accountCode, creditAccountCode } = body;
 
     if (!id) {
       return apiError('Fixed asset ID is required', 400);
     }
 
     // Check if asset exists
-    const existingAsset = await (prisma as any).fixedAsset.findUnique({
-      where: { id },
+    const existingAsset = await (prisma as any).fixedAsset.findFirst({
+      where: { id, tenantId: user.tenantId },
     });
 
     if (!existingAsset) {
@@ -232,7 +473,7 @@ export async function PUT(request: Request) {
       });
 
       // Trigger workflow transition
-      await transitionEntity('FixedAsset', id, 'disposed', user.id, { disposedAt: new Date() });
+      await ensureWorkflowTransition('FixedAsset', id, 'disposed', user.id, { disposedAt: new Date() });
 
       // Audit logging
       await logAuditAction(
@@ -245,23 +486,98 @@ export async function PUT(request: Request) {
       return apiSuccess({ id, status: 'disposed' }, 'Fixed asset disposed successfully');
     }
 
-    // Regular update
-    const asset = await (prisma as any).fixedAsset.update({
-      where: { id },
-      data: {
-        description: description || undefined,
-      },
+    const nextName = String(name || existingAsset.name).trim();
+    const nextPurchaseDate = purchaseDate ? new Date(purchaseDate) : existingAsset.purchaseDate;
+    const nextPurchaseCost = Number(purchaseCost ?? existingAsset.purchaseCost);
+    const nextUsefulLife = parseInt(String(usefulLife ?? existingAsset.usefulLife), 10);
+    const nextSalvageValue = Number(salvageValue ?? existingAsset.salvageValue ?? 0);
+    const nextCategory = normalizeCategory(category);
+    const nextDescription = description || buildAssetDescription(nextCategory, notes ?? parseNotesFromDescription(existingAsset.description));
+    if (!nextName) return apiError('اسم الأصل مطلوب', 400);
+    if (Number.isNaN(nextPurchaseDate.getTime())) return apiError('تاريخ الأصل غير صالح', 400);
+    if (!Number.isFinite(nextPurchaseCost) || nextPurchaseCost <= 0) return apiError('قيمة الأصل يجب أن تكون أكبر من صفر', 400);
+    if (!Number.isFinite(nextUsefulLife) || nextUsefulLife <= 0) return apiError('العمر المحاسبي غير صالح', 400);
+    if (!Number.isFinite(nextSalvageValue) || nextSalvageValue < 0) return apiError('القيمة التخريدية غير صالحة', 400);
+    if (nextSalvageValue > nextPurchaseCost) return apiError('القيمة التخريدية لا يمكن أن تتجاوز قيمة الأصل', 400);
+
+    const hasPostedDepreciation = await (prisma as any).depreciationSchedule.count({
+      where: { fixedAssetId: id, posted: true },
+    });
+    const financialFieldsChanged =
+      nextPurchaseCost !== Number(existingAsset.purchaseCost) ||
+      nextUsefulLife !== Number(existingAsset.usefulLife) ||
+      nextSalvageValue !== Number(existingAsset.salvageValue || 0) ||
+      nextPurchaseDate.getTime() !== new Date(existingAsset.purchaseDate).getTime() ||
+      nextName !== existingAsset.name;
+
+    if (hasPostedDepreciation > 0 && financialFieldsChanged) {
+      return apiError('لا يمكن تعديل قيمة أو تاريخ أو عمر الأصل بعد ترحيل إهلاك عليه', 400);
+    }
+
+    const { assetAccountCode, fundingAccountCode } = await resolveAssetAccounts(
+      user.tenantId!,
+      accountCode || existingAsset.accountCode,
+      creditAccountCode,
+    );
+    if (fundingAccountCode === assetAccountCode) {
+      return apiError('الحساب المقابل يجب أن يكون مختلفًا عن حساب الأصل', 400);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (financialFieldsChanged) {
+        await reverseAllJournalEntriesForReferenceId(tx, user.tenantId!, id, 'FixedAsset');
+      }
+
+      await (tx as any).fixedAsset.update({
+        where: { id },
+        data: {
+          name: nextName,
+          description: nextDescription,
+          accountCode: assetAccountCode,
+          purchaseDate: nextPurchaseDate,
+          purchaseCost: nextPurchaseCost,
+          usefulLife: nextUsefulLife,
+          salvageValue: nextSalvageValue,
+          netBookValue: nextPurchaseCost - nextSalvageValue,
+        },
+      });
+    });
+
+    if (financialFieldsChanged) {
+      await recreateDepreciationSchedules({
+        fixedAssetId: id,
+        purchaseDate: nextPurchaseDate,
+        purchaseCost: nextPurchaseCost,
+        usefulLife: nextUsefulLife,
+        salvageValue: nextSalvageValue,
+      });
+
+      await createFixedAssetJournalEntry({
+        assetId: id,
+        assetNumber: existingAsset.assetNumber,
+        tenantId: user.tenantId!,
+        userId: user.id,
+        name: nextName,
+        accountCode: assetAccountCode,
+        creditAccountCode: fundingAccountCode,
+        purchaseDate: nextPurchaseDate,
+        purchaseCost: nextPurchaseCost,
+      });
+    }
+
+    const asset = await (prisma as any).fixedAsset.findFirst({
+      where: { id, tenantId: user.tenantId },
     });
 
     // Trigger workflow transition if status changed
     if (status && status !== existingAsset.status) {
-      await transitionEntity('FixedAsset', id, status, user.id, { status });
+      await ensureWorkflowTransition('FixedAsset', id, status, user.id, { status });
     }
 
     // Audit logging
     await logAuditAction(
       user.id, 'UPDATE', 'accounting', 'FixedAsset', id,
-      { body },
+      { body, financialFieldsChanged },
       request.headers.get('x-forwarded-for') || undefined,
       request.headers.get('user-agent') || undefined
     );
@@ -287,8 +603,8 @@ export async function DELETE(request: Request) {
     }
 
     // Check if asset exists
-    const asset = await (prisma as any).fixedAsset.findUnique({
-      where: { id },
+    const asset = await (prisma as any).fixedAsset.findFirst({
+      where: { id, tenantId: user.tenantId },
     });
 
     if (!asset) {

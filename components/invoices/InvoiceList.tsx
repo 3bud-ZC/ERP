@@ -343,9 +343,9 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
                             className="p-1.5 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700 rounded-md">
                             <Eye className="w-4 h-4" />
                           </Link>
-                          {inv.paymentStatus !== 'paid' && inv.status !== 'cancelled' && config.kind === 'purchase' && (
+                          {inv.paymentStatus !== 'paid' && inv.status !== 'cancelled' && (
                             <button onClick={() => setPaymentInvoice(inv)}
-                              title="سداد"
+                              title={config.kind === 'sales' ? 'تحصيل' : 'سداد'}
                               className="p-1.5 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700 rounded-md">
                               <WalletCards className="w-4 h-4" />
                             </button>
@@ -393,10 +393,12 @@ export function InvoiceList({ config }: { config: InvoiceConfig }) {
           isOpen={!!paymentInvoice}
           onClose={() => setPaymentInvoice(null)}
           invoiceId={paymentInvoice.id}
+          invoiceType={config.kind}
+          customerId={paymentInvoice.customer?.id}
           supplierId={paymentInvoice.supplier?.id}
           defaultAmount={Math.max(0, (paymentInvoice.grandTotal ?? paymentInvoice.total) - (paymentInvoice.paidAmount ?? 0))}
           onSuccess={() => {
-            showToast('تم السداد بنجاح', 'success');
+            showToast(config.kind === 'sales' ? 'تم التحصيل بنجاح' : 'تم السداد بنجاح', 'success');
             qc.invalidateQueries({ queryKey });
             refetch();
           }}

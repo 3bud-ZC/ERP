@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Polls DNS; runs /tmp/vps-ssl-activate.sh once erp-abud.com resolves to VPS IP.
+# Polls DNS; runs /tmp/vps-ssl-activate.sh once erp.abud.fun resolves to VPS IP.
 set -euo pipefail
 
-TARGET_IP="159.223.167.220"
-DOMAINS=("erp-abud.com" "www.erp-abud.com")
+TARGET_IP="167.99.157.6"
+DOMAINS=("erp.abud.fun" "www.erp.abud.fun")
 LOG="/var/log/erp-ssl-wait.log"
 
 resolve_a() {

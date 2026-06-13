@@ -3,12 +3,12 @@ import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { seedChartOfAccounts } from '@/lib/chart-of-accounts';
 import { getTenantSettings, updateTenantSettings, isOnboardingComplete } from '@/lib/tenant-config';
+import { getPreferredUserTenantId } from '@/lib/user-tenant';
 
 export const dynamic = 'force-dynamic';
 
 async function getUserTenant(userId: string) {
-  const utr = await prisma.userTenantRole.findFirst({ where: { userId }, select: { tenantId: true } });
-  return utr?.tenantId || null;
+  return getPreferredUserTenantId(userId);
 }
 
 export async function GET(req: Request) {

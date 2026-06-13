@@ -12,6 +12,7 @@
 import jwt from 'jsonwebtoken';
 import { prisma } from '@/lib/db';
 import { setTenantContext } from '@/lib/prisma-tenant-middleware';
+import { getPreferredUserTenantId } from '@/lib/user-tenant';
 
 // JWT Configuration
 const JWT_SECRET: string = process.env.JWT_SECRET || '';
@@ -135,7 +136,6 @@ async function getUserWithAuth(userId: string): Promise<{
   isActive: boolean;
   roles: string[];
   permissions: string[];
-  tenantId: string | null;
 } | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -151,12 +151,6 @@ async function getUserWithAuth(userId: string): Promise<{
               },
             },
           },
-        },
-      },
-      userTenantRoles: {
-        take: 1,
-        select: {
-          tenantId: true,
         },
       },
     },
@@ -182,7 +176,6 @@ async function getUserWithAuth(userId: string): Promise<{
     isActive: user.isActive,
     roles,
     permissions,
-    tenantId: user.userTenantRoles[0]?.tenantId || null,
   };
 }
 
@@ -228,25 +221,26 @@ export async function requireAuth(request: Request): Promise<AuthContext> {
   }
 
   // Step 5: Validate tenant binding (CRITICAL for multi-tenant security)
+  const preferredTenantId = await getPreferredUserTenantId(user.id, decoded.tenantId);
   let tenantId: string;
 
   if (decoded.tenantId) {
     // Token has tenantId - verify it matches database (anti-spoofing)
-    if (user.tenantId && user.tenantId !== decoded.tenantId) {
+    if (preferredTenantId && preferredTenantId !== decoded.tenantId) {
       console.error('SECURITY: Tenant mismatch detected', {
         userId: user.id,
         tokenTenantId: decoded.tenantId,
-        dbTenantId: user.tenantId,
+        dbTenantId: preferredTenantId,
       });
       throw new AuthError('TENANT_MISMATCH', 'Invalid tenant context');
     }
     tenantId = decoded.tenantId;
   } else {
     // Legacy token without tenantId - use database value
-    if (!user.tenantId) {
+    if (!preferredTenantId) {
       throw new AuthError('UNAUTHORIZED', 'User not assigned to any tenant');
     }
-    tenantId = user.tenantId;
+    tenantId = preferredTenantId;
   }
 
   // Step 6: Set tenant context for all subsequent database queries

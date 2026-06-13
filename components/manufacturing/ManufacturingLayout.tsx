@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  ClipboardList, Layers, GitBranch, AlertTriangle,
+  ClipboardList, Layers, GitBranch,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -16,7 +16,6 @@ const TABS = [
   { href: '/manufacturing/production-orders',  title: 'أوامر الإنتاج', icon: ClipboardList },
   { href: '/manufacturing/bom',                title: 'قوائم المواد',  icon: Layers },
   { href: '/manufacturing/production-lines',   title: 'خطوط الإنتاج', icon: GitBranch },
-  { href: '/manufacturing/waste',              title: 'الفاقد',         icon: AlertTriangle },
 ] as const;
 
 export function ManufacturingLayout({

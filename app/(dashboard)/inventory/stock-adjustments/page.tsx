@@ -25,11 +25,16 @@ interface StockAdjustment {
   type:             'increase' | 'decrease';
   quantity:         number;
   reason:           string;
+  applyToStock?:    boolean;
+  sourceType?:      string | null;
+  sourceId?:        string | null;
   notes?:           string | null;
   status:           string;
   date:             string;
   product?: { nameAr?: string; code?: string; unit?: string };
 }
+
+const AUTO_PRODUCTION_WASTE_SOURCE = 'ProductionOrderWasteAuto';
 
 const REASON_LABELS: Record<string, string> = {
   damaged:    'تالف',
@@ -47,7 +52,7 @@ const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
   rejected: { label: 'مرفوضة',        cls: 'bg-red-50 text-red-700 border-red-200' },
 };
 
-const TABLE_COLS = ['w-28', 'w-28', 'w-32', 'w-24', 'w-20', 'w-24', 'w-28', 'w-20'];
+const TABLE_COLS = ['w-28', 'w-28', 'w-32', 'w-24', 'w-20', 'w-24', 'w-32', 'w-24', 'w-20'];
 
 export default function StockAdjustmentsPage() {
   const qc = useQueryClient();
@@ -84,6 +89,7 @@ export default function StockAdjustmentsPage() {
       if (!q) return true;
       const p = productMap.get(a.productId);
       const hay = [a.adjustmentNumber, p?.nameAr, p?.code, REASON_LABELS[a.reason] ?? a.reason]
+        .concat(a.notes ?? '', a.sourceType ?? '')
         .filter(Boolean).join(' ').toLowerCase();
       return hay.includes(q);
     });
@@ -178,6 +184,7 @@ export default function StockAdjustmentsPage() {
                 <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500">النوع</th>
                 <th className="px-5 py-3 text-left  text-xs font-semibold text-slate-500">الكمية</th>
                 <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500">السبب</th>
+                <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500">المرجع</th>
                 <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500">الحالة</th>
                 <th className="px-5 py-3 text-center text-xs font-semibold text-slate-500">إجراءات</th>
               </tr>
@@ -187,6 +194,8 @@ export default function StockAdjustmentsPage() {
                 const p = productMap.get(a.productId);
                 const status = STATUS_LABELS[a.status] ?? STATUS_LABELS.pending;
                 const isInc  = a.type === 'increase';
+                const isReferenceOnly = a.applyToStock === false;
+                const isAutoProductionWaste = a.sourceType === AUTO_PRODUCTION_WASTE_SOURCE;
                 return (
                   <tr key={a.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-3 text-sm font-mono text-slate-700">{a.adjustmentNumber}</td>
@@ -211,7 +220,24 @@ export default function StockAdjustmentsPage() {
                     <td className="px-5 py-3 text-sm font-semibold text-slate-700 text-left tabular-nums">
                       {isInc ? '+' : '-'}{a.quantity.toLocaleString('ar-EG')} {a.product?.unit || p?.unit || ''}
                     </td>
-                    <td className="px-5 py-3 text-sm text-slate-600">{REASON_LABELS[a.reason] ?? a.reason}</td>
+                    <td className="px-5 py-3 text-sm text-slate-600">
+                      <div>{REASON_LABELS[a.reason] ?? a.reason}</div>
+                      {isReferenceOnly && (
+                        <span className="mt-1 inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+                          عرض فقط
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 text-sm text-slate-600">
+                      {isAutoProductionWaste ? (
+                        <div>
+                          <div className="font-medium text-slate-700">فاقد أمر إنتاج</div>
+                          {a.notes && <div className="text-xs text-slate-400">{a.notes}</div>}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-center">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${status.cls}`}>
                         {status.label}

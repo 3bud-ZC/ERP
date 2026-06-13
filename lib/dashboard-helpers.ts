@@ -1,12 +1,10 @@
-import { NextRequest } from 'next/server';
 import { requireAuth } from './auth';
 import { dashboardCache } from './cache';
-import { prisma } from './db';
 import { requireOnboarded, isOnboardingExempt } from './tenant-config';
+import { getPreferredUserTenantId } from './user-tenant';
 
 async function getUserTenantId(userId: string): Promise<string | null> {
-  const utr = await prisma.userTenantRole.findFirst({ where: { userId }, select: { tenantId: true } });
-  return utr?.tenantId || null;
+  return getPreferredUserTenantId(userId);
 }
 
 export async function enforceOnboarding(req: Request, userId: string) {

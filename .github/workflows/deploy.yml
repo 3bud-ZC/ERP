@@ -2,10 +2,14 @@ name: CI + VPS Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [final, main, master]
   pull_request:
-    branches: [main]
+    branches: [final, main, master]
   workflow_dispatch:
+
+concurrency:
+  group: vps-deploy-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -118,23 +122,33 @@ jobs:
             set -a
             . ./.env
             set +a
-            npm install
+            npm install --no-audit --no-fund
             npx prisma generate
             npx prisma migrate deploy
             npm run build
 
             ln -sfn "$RELEASE_DIR" "$APP_ROOT/current"
 
-            pm2 delete "$PM2_APP" || true
             cd "$APP_ROOT/current"
             set -a
             . ./.env
             set +a
-            pm2 start npm --name "$PM2_APP" -- start
+            export PM2_APP="$PM2_APP"
+            export APP_ROOT="$APP_ROOT"
+            export APP_CWD="$APP_ROOT/current"
+            export PM2_LOG_DIR="$APP_ROOT/logs"
+            mkdir -p "$PM2_LOG_DIR"
+
+            if pm2 describe "$PM2_APP" >/dev/null 2>&1; then
+              pm2 delete "$PM2_APP"
+            fi
+
+            pm2 start deployment/ecosystem.config.js --env production --update-env
             pm2 save
 
+            HEALTH_PORT="${PORT:-3000}"
             for i in 1 2 3 4 5 6 7 8; do
-              if curl -fsS http://127.0.0.1:3100/api/health; then
+              if curl -fsS "http://127.0.0.1:${HEALTH_PORT}/api/health"; then
                 break
               fi
               sleep 3
@@ -144,8 +158,12 @@ jobs:
       - name: Post-deploy smoke test
         run: |
           ssh $SSH_OPTS "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" '
+            PUBLIC_URL="${{ secrets.VPS_PUBLIC_URL }}"
+            if [ -z "$PUBLIC_URL" ]; then
+              PUBLIC_URL="https://${{ secrets.VPS_HOST }}"
+            fi
             for i in 1 2 3 4 5 6 7 8 9 10; do
-              if curl -fsS https://erp.abud.fun/api/health; then
+              if curl -kfsS "$PUBLIC_URL/api/health"; then
                 exit 0
               fi
               sleep 3

@@ -35,6 +35,7 @@ export async function GET(request: Request) {
         productionLine: true,
         items: { include: { product: true } },
         workInProgress: true,
+        productionWastes: true,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -59,6 +60,9 @@ export async function POST(request: Request) {
       quantity,
       laborCost = 0,
       overheadCost = 0,
+      cashboxId,
+      laborPaymentCategory = 'wages',
+      overheadPaymentCategory = 'production_cost',
       items: manualItems,
       ...orderData
     } = body as {
@@ -66,6 +70,9 @@ export async function POST(request: Request) {
       quantity: number;
       laborCost?: number;
       overheadCost?: number;
+      cashboxId?: string;
+      laborPaymentCategory?: string;
+      overheadPaymentCategory?: string;
       items?: Array<{ materialId: string; quantity: number }>;
       [k: string]: unknown;
     };
@@ -122,6 +129,20 @@ export async function POST(request: Request) {
       quantity: row.quantity * quantity,
     }));
 
+    if ((Number(laborCost) > 0 || Number(overheadCost) > 0) && !String(cashboxId || '').trim()) {
+      return apiError('يجب اختيار الخزنة لربط تكاليف العمالة والتشغيل بالمدفوعات', 400);
+    }
+
+    if (cashboxId) {
+      const cashbox = await prisma.cashbox.findFirst({
+        where: { id: String(cashboxId), tenantId: user.tenantId, status: 'active' },
+        select: { id: true },
+      });
+      if (!cashbox) {
+        return apiError('الخزنة المحددة غير موجودة أو غير نشطة', 400);
+      }
+    }
+
     const validation = await validateRawMaterialAvailability(
       materialLines.map(m => ({ materialId: m.productId, quantity: m.quantity })),
     );
@@ -143,6 +164,9 @@ export async function POST(request: Request) {
           productionLineId: orderData.productionLineId as string | undefined,
           laborCost: Number(laborCost) || 0,
           overheadCost: Number(overheadCost) || 0,
+          cashboxId: cashboxId ? String(cashboxId) : undefined,
+          laborPaymentCategory: String(laborPaymentCategory || 'wages'),
+          overheadPaymentCategory: String(overheadPaymentCategory || 'production_cost'),
         },
         materialLines,
       });
@@ -186,7 +210,7 @@ export async function PUT(request: Request) {
 
     const order = await prisma.productionOrder.findFirst({
       where: { id, tenantId: user.tenantId },
-      include: { items: true, workInProgress: true },
+      include: { items: true, workInProgress: true, productionWastes: true },
     });
 
     if (!order) return apiError('أمر الإنتاج غير موجود', 404);
@@ -289,7 +313,7 @@ export async function PUT(request: Request) {
     const updated = await prisma.productionOrder.update({
       where: { id },
       data: { status, actualOutputQuantity, ...updateData },
-      include: { items: true, workInProgress: true, product: true, productionLine: true },
+      include: { items: true, workInProgress: true, product: true, productionLine: true, productionWastes: true },
     });
 
     await recordAuditTrail({

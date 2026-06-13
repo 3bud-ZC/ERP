@@ -8,6 +8,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { setTenantContext, getTenantContext, clearTenantContext } from './prisma-tenant-middleware';
 import { tenantStatusAllowsAccess } from './admin/platform-admin';
+import { getPreferredUserTenantId, pickPreferredTenantRole } from './user-tenant';
 
 const JWT_EXPIRY = '7d';
 
@@ -171,7 +172,9 @@ export async function loginUser(
         userTenantRoles: {
           include: {
             tenant: true,
+            role: true,
           },
+          orderBy: { assignedAt: 'desc' },
         },
       },
     });
@@ -184,7 +187,7 @@ export async function loginUser(
       throw new Error('حسابك معطل');
     }
 
-    const activeTenantRole = user.userTenantRoles[0];
+    const activeTenantRole = pickPreferredTenantRole(user.userTenantRoles);
     if (activeTenantRole?.tenant && !tenantStatusAllowsAccess(activeTenantRole.tenant.status)) {
       throw new Error('حساب الشركة غير نشط. تواصل مع مالك النظام');
     }
@@ -477,14 +480,9 @@ export async function createNotification(
 /**
  * Get user's tenant ID from UserTenantRole
  */
-export async function getUserTenantId(userId: string): Promise<string | null> {
+export async function getUserTenantId(userId: string, preferredTenantId?: string | null): Promise<string | null> {
   try {
-    const userTenantRole = await prisma.userTenantRole.findFirst({
-      where: { userId },
-      include: { tenant: true },
-    });
-
-    return userTenantRole?.tenantId || null;
+    return await getPreferredUserTenantId(userId, preferredTenantId);
   } catch (error) {
     console.error('Error getting user tenant:', error);
     return null;
@@ -570,7 +568,7 @@ export async function getAuthenticatedUser(req: Request): Promise<{
       tenantId = dbTenantId || undefined;
     } else {
       // SECURITY: Verify token tenantId matches user's actual tenant (prevent tenant spoofing)
-      const dbTenantId = await getUserTenantId(user.id);
+      const dbTenantId = await getUserTenantId(user.id, tenantId);
       if (dbTenantId && dbTenantId !== tenantId) {
         console.error('SECURITY: Token tenantId mismatch detected', {
           tokenTenantId: tenantId,

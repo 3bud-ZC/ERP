@@ -23,6 +23,15 @@ export async function executeApproveStockAdjustment(params: {
     throw new InvoiceExecutionError('VALIDATION_FAILED', 'Already approved');
   }
 
+  if (!adj.applyToStock) {
+    const updated = await prisma.stockAdjustment.update({
+      where: { id: adj.id },
+      data: { status: 'approved' },
+      include: { product: true },
+    });
+    return { adjustment: updated, journalEntry: null };
+  }
+
   const profile = await getPostingProfile(params.tenantId);
   const type = adj.type as 'increase' | 'decrease';
   const warehouseId = adj.product.warehouseId;

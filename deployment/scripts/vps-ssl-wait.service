@@ -1,5 +1,5 @@
 [Unit]
-Description=ERP SSL auto-activation when DNS for erp-abud.com is ready
+Description=ERP SSL auto-activation when DNS for erp.abud.fun is ready
 After=network-online.target nginx.service
 Wants=network-online.target
 

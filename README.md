@@ -49,7 +49,7 @@ Production-grade safety guards and a bilingual UI (Arabic RTL + English).
 
 ```bash
 # 1. Clone & install (default branch is `final`)
-git clone https://github.com/3bud-ZC/erp-system.git
+git clone https://github.com/3bud-ZC/ERP.git
 cd erp-system
 npm install
 
@@ -380,7 +380,7 @@ erp-system/
 
 ### CI pipeline (`.github/workflows/ci.yml`)
 
-Runs on every push & PR to `master`/`main`:
+Runs on every push & PR to `final`/`main`/`master`:
 
 ```
 checkout → setup-node → npm ci → prisma generate → migrate (CI DB only) →
@@ -440,7 +440,7 @@ Proprietary — © 2026 3bud-ZC. All rights reserved.
 
 **Built with ❤️ for production**
 
-[Report an issue](https://github.com/3bud-ZC/erp-system/issues) ·
-[View source](https://github.com/3bud-ZC/erp-system)
+[Report an issue](https://github.com/3bud-ZC/ERP/issues) ·
+[View source](https://github.com/3bud-ZC/ERP)
 
 </div>

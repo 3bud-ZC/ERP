@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ERP_DIR="/var/www/erp"
-DOMAIN="og-estore.site"
+DOMAIN="erp.abud.fun"
 LOG="/tmp/erp-post-reboot-$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG") 2>&1
 

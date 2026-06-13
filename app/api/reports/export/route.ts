@@ -6,6 +6,9 @@ import { prisma } from '@/lib/db';
 import { apiError, handleApiError } from '@/lib/api-response';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { hasReportAccess, type ReportKey } from '@/lib/reports/report-access';
+import { buildWasteReportData, type WasteReportSource } from '@/lib/reports/waste-report';
+import { buildBalanceSheetData } from '@/lib/reports/balance-sheet';
+import { openingNet } from '@/lib/services/party-debt.service';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -20,14 +23,15 @@ const REPORT_KEYS = new Set<ReportKey>([
   'sales',
   'purchases',
   'inventory',
+  'waste',
   'expenses',
   'customer-statement',
   'supplier-statement',
   'receivables',
   'payables',
-  'aging',
   'profit-loss',
   'balance-sheet',
+  'cashbox-print',
   'manufacturing',
 ]);
 
@@ -62,6 +66,8 @@ async function buildDataset(report: ReportKey, tenantId: string, params: URLSear
       return buildPurchasesDataset(tenantId, params);
     case 'inventory':
       return buildInventoryDataset(tenantId, params);
+    case 'waste':
+      return buildWasteDataset(tenantId, params);
     case 'expenses':
       return buildExpensesDataset(tenantId, params);
     case 'customer-statement':
@@ -72,12 +78,12 @@ async function buildDataset(report: ReportKey, tenantId: string, params: URLSear
       return buildReceivablesDataset(tenantId, params);
     case 'payables':
       return buildPayablesDataset(tenantId, params);
-    case 'aging':
-      return buildAgingDataset(tenantId, params);
     case 'profit-loss':
       return buildProfitLossDataset(tenantId, params);
     case 'balance-sheet':
       return buildBalanceSheetDataset(tenantId, params);
+    case 'cashbox-print':
+      return buildCashboxPrintDataset(tenantId, params);
     case 'manufacturing':
       return buildManufacturingDataset(tenantId, params);
     default:
@@ -243,6 +249,7 @@ async function buildExpensesDataset(tenantId: string, params: URLSearchParams): 
       amount: true,
       description: true,
       cashboxId: true,
+      cashbox: { select: { name: true } },
     },
     orderBy: { date: 'desc' },
   });
@@ -253,9 +260,34 @@ async function buildExpensesDataset(tenantId: string, params: URLSearchParams): 
     rows: expenses.map((expense) => [
       toArDate(expense.date),
       expense.category || '-',
-      expense.cashboxId ? 'مرتبط بخزنة' : 'غير محدد',
+      expense.cashbox ? `خزنة - ${expense.cashbox.name}` : (expense.cashboxId ? 'مرتبط بخزنة' : 'غير محدد'),
       Number(expense.amount || 0),
       expense.description || '-',
+    ]),
+  };
+}
+
+async function buildWasteDataset(tenantId: string, params: URLSearchParams): Promise<ReportDataset> {
+  const source = (params.get('source') || 'all') as WasteReportSource;
+  const data = await buildWasteReportData({
+    tenantId,
+    fromDate: parseDate(params.get('fromDate')),
+    toDate: endOfDay(parseDate(params.get('toDate'))),
+    productId: params.get('productId') || undefined,
+    source,
+  });
+
+  return {
+    title: 'تقرير الفاقد',
+    columns: ['التاريخ', 'المنتج', 'المصدر', 'المرجع', 'الكمية', 'الوحدة', 'ملاحظات'],
+    rows: data.rows.map((row) => [
+      toArDate(row.date),
+      `${row.productName} (${row.productCode})`,
+      row.sourceLabel,
+      row.reference || '—',
+      row.quantity,
+      row.unit || '',
+      row.notes || '—',
     ]),
   };
 }
@@ -364,80 +396,126 @@ async function buildOpenInvoiceDataset(kind: 'sales' | 'purchase', tenantId: str
   const toDate = endOfDay(parseDate(params.get('toDate')));
   const isSales = kind === 'sales';
 
-  const invoices = isSales
-    ? await prisma.salesInvoice.findMany({
-        where: {
-          tenantId,
-          date: { gte: fromDate, lte: toDate },
-          ...(paymentStatus && paymentStatus !== 'all' && paymentStatus !== 'open' ? { paymentStatus } : {}),
-        },
-        select: {
-          invoiceNumber: true,
-          date: true,
-          total: true,
-          grandTotal: true,
-          paidAmount: true,
-          paymentStatus: true,
-          paymentTermsDays: true,
-          customer: { select: { code: true, nameAr: true } },
-        },
-        orderBy: { date: 'desc' },
-      })
-    : await prisma.purchaseInvoice.findMany({
-        where: {
-          tenantId,
-          date: { gte: fromDate, lte: toDate },
-          ...(paymentStatus && paymentStatus !== 'all' && paymentStatus !== 'open' ? { paymentStatus } : {}),
-        },
-        select: {
-          invoiceNumber: true,
-          date: true,
-          total: true,
-          grandTotal: true,
-          paidAmount: true,
-          paymentStatus: true,
-          paymentTermsDays: true,
-          supplier: { select: { code: true, nameAr: true } },
-        },
-        orderBy: { date: 'desc' },
-      });
+  const [parties, invoices, settlements] = await Promise.all([
+    isSales
+      ? prisma.customer.findMany({
+          where: { tenantId, isActive: true },
+          select: { id: true, code: true, nameAr: true, openingBalanceType: true, openingBalanceAmount: true, openingBalanceDate: true },
+        })
+      : prisma.supplier.findMany({
+          where: { tenantId, isActive: true },
+          select: { id: true, code: true, nameAr: true, openingBalanceType: true, openingBalanceAmount: true, openingBalanceDate: true },
+        }),
+    isSales
+      ? prisma.salesInvoice.findMany({
+          where: {
+            tenantId,
+            date: { gte: fromDate, lte: toDate },
+            ...(paymentStatus && paymentStatus !== 'all' && paymentStatus !== 'open' ? { paymentStatus } : {}),
+          },
+          select: {
+            invoiceNumber: true,
+            date: true,
+            total: true,
+            grandTotal: true,
+            paidAmount: true,
+            paymentStatus: true,
+            paymentTermsDays: true,
+            customer: { select: { id: true, code: true, nameAr: true } },
+          },
+          orderBy: { date: 'desc' },
+        })
+      : prisma.purchaseInvoice.findMany({
+          where: {
+            tenantId,
+            date: { gte: fromDate, lte: toDate },
+            ...(paymentStatus && paymentStatus !== 'all' && paymentStatus !== 'open' ? { paymentStatus } : {}),
+          },
+          select: {
+            invoiceNumber: true,
+            date: true,
+            total: true,
+            grandTotal: true,
+            paidAmount: true,
+            paymentStatus: true,
+            paymentTermsDays: true,
+            supplier: { select: { id: true, code: true, nameAr: true } },
+          },
+          orderBy: { date: 'desc' },
+        }),
+    prisma.partyDebtTransaction.findMany({
+      where: {
+        tenantId,
+        partyType: isSales ? 'customer' : 'supplier',
+        transactionType: isSales ? { in: ['customer_collection', 'customer_refund'] } : { in: ['supplier_payment', 'supplier_refund'] },
+        date: { gte: fromDate, lte: toDate },
+      },
+      select: {
+        id: true,
+        customerId: true,
+        supplierId: true,
+        transactionType: true,
+        amount: true,
+        date: true,
+        notes: true,
+      },
+      orderBy: { date: 'desc' },
+    }),
+  ]);
 
-  const rows = invoices
-    .map((invoice: any) => {
+  const invoiceRows = (invoices as any[])
+    .map((invoice) => {
       const total = Number(invoice.grandTotal || invoice.total || 0);
       const paid = Number(invoice.paidAmount || 0);
       const remaining = Math.max(0, total - paid);
       const dueDate = new Date(invoice.date);
       dueDate.setDate(dueDate.getDate() + Number(invoice.paymentTermsDays || 0));
       const overdueDays = remaining > 0 ? Math.max(0, Math.floor((Date.now() - dueDate.getTime()) / 86400000)) : 0;
-      return {
-        party: isSales ? invoice.customer : invoice.supplier,
-        invoiceNumber: invoice.invoiceNumber,
-        invoiceDate: invoice.date,
-        total,
-        paid,
-        remaining,
-        dueDate,
-        overdueDays,
-        paymentStatus: invoice.paymentStatus,
-      };
+      const party = isSales ? invoice.customer : invoice.supplier;
+      return [ `${party?.nameAr || '-'} (${party?.code || '-'})`, isSales ? 'فاتورة مبيعات' : 'فاتورة مشتريات', invoice.invoiceNumber, toArDate(invoice.date), toArDate(dueDate), total, paid, remaining, overdueDays ];
     })
-    .filter((row) => (paymentStatus === 'open' || !paymentStatus || paymentStatus === 'all' ? row.remaining > 0.01 : true))
-    .map((row) => [
-      `${row.party?.nameAr || '-'} (${row.party?.code || '-'})`,
-      row.invoiceNumber,
-      toArDate(row.invoiceDate),
-      toArDate(row.dueDate),
-      row.total,
-      row.paid,
-      row.remaining,
-      row.overdueDays,
-      row.paymentStatus || '—',
-    ]);
+    .filter((row) => (paymentStatus === 'open' || !paymentStatus || paymentStatus === 'all' ? Math.abs(Number(row[7])) > 0.01 : true));
+
+  const openingRows = (parties as any[])
+    .map((party) => {
+      const opening = openingNet(isSales ? 'customer' : 'supplier', party.openingBalanceType, party.openingBalanceAmount);
+      if (opening <= 0.01) return null;
+      return [
+        `${party.nameAr || '-'} (${party.code || '-'})`,
+        'رصيد افتتاحي',
+        'رصيد افتتاحي',
+        toArDate(party.openingBalanceDate),
+        toArDate(party.openingBalanceDate),
+        opening,
+        0,
+        opening,
+        0,
+      ];
+    })
+    .filter(Boolean) as Array<Array<string | number>>;
+
+  const settlementRows = (settlements as any[]).map((row) => {
+    const party = (parties as any[]).find((item) => item.id === (isSales ? row.customerId : row.supplierId));
+    const amount = Number(row.amount || 0);
+    const remaining = row.transactionType === (isSales ? 'customer_collection' : 'supplier_payment') ? -amount : amount;
+    return [
+      `${party?.nameAr || '-'} (${party?.code || '-'})`,
+      isSales ? (row.transactionType === 'customer_collection' ? 'تحصيل مباشر' : 'رصيد دائن للعميل') : (row.transactionType === 'supplier_payment' ? 'سداد مباشر' : 'تحصيل من المورد'),
+      row.notes || row.transactionType,
+      toArDate(row.date),
+      toArDate(row.date),
+      0,
+      amount,
+      remaining,
+      0,
+    ];
+  });
+
+  const rows = [...openingRows, ...invoiceRows, ...settlementRows];
 
   return {
     title: isSales ? 'تقرير مديونيات العملاء' : 'تقرير مستحقات الموردين',
-    columns: ['الطرف', 'رقم الفاتورة', 'تاريخ الفاتورة', 'الاستحقاق', 'الإجمالي', 'المدفوع', 'المتبقي', 'أيام التأخير', 'الحالة'],
+    columns: ['الطرف', 'البيان', 'المرجع', 'التاريخ', 'الاستحقاق', 'الإجمالي', 'المدفوع', 'المتبقي', 'أيام التأخير'],
     rows,
   };
 }
@@ -556,34 +634,75 @@ async function buildProfitLossDataset(tenantId: string, params: URLSearchParams)
 
 async function buildBalanceSheetDataset(tenantId: string, params: URLSearchParams): Promise<ReportDataset> {
   const asOfDate = endOfDay(parseDate(params.get('asOfDate')));
-  const accounts = await prisma.account.findMany({
-    where: { tenantId, isActive: true },
-    select: { code: true, nameAr: true, type: true },
-  });
-  const lineTotals = await prisma.journalEntryLine.groupBy({
-    by: ['accountCode'],
-    where: {
-      tenantId,
-      journalEntry: {
-        tenantId,
-        isPosted: true,
-        entryDate: { lte: asOfDate },
-      },
-    },
-    _sum: { debit: true, credit: true },
-  });
-  const totalsMap = new Map(lineTotals.map((line) => [line.accountCode, { debit: Number(line._sum.debit || 0), credit: Number(line._sum.credit || 0) }]));
+  const data = await buildBalanceSheetData(tenantId, asOfDate);
+  const sections = [
+    data.sections.fixedAssets,
+    data.sections.currentAssets,
+    data.sections.treasury,
+    data.sections.inventory,
+    data.sections.customers,
+    data.sections.suppliers,
+    data.sections.expenses,
+    data.sections.liabilities,
+    data.sections.equity,
+  ];
 
-  const rows = accounts.map((account) => {
-    const totals = totalsMap.get(account.code) || { debit: 0, credit: 0 };
-    const amount = account.type === 'Asset' ? totals.debit - totals.credit : totals.credit - totals.debit;
-    return [account.type, account.code, account.nameAr, amount];
-  });
+  const rows: Array<Array<string | number>> = [];
+  for (const section of sections) {
+    rows.push([section.title, '', '', section.total]);
+    for (const row of section.rows) {
+      rows.push([section.title, row.label, row.source, row.amount]);
+    }
+  }
+  rows.push(['', 'إجمالي الأصول', '', data.summary.totalAssets]);
+  rows.push(['', 'إجمالي الالتزامات', '', data.summary.totalLiabilities]);
+  rows.push(['', 'صافي المركز المالي', '', data.summary.netFinancialPosition]);
+  rows.push(['', 'إجمالي الخصوم + حقوق الملكية', '', data.summary.totalLiabilitiesAndEquity]);
+  rows.push(['', 'الفرق', '', data.summary.difference]);
 
   return {
     title: 'الميزانية العمومية',
-    columns: ['النوع', 'الكود', 'الحساب', 'الرصيد'],
+    columns: ['القسم', 'البند', 'المصدر', 'القيمة'],
     rows,
+  };
+}
+
+async function buildCashboxPrintDataset(tenantId: string, params: URLSearchParams): Promise<ReportDataset> {
+  const fromDate = parseDate(params.get('fromDate'));
+  const toDate = endOfDay(parseDate(params.get('toDate')));
+  const cashboxId = params.get('cashboxId');
+
+  const cashboxes = await (prisma as any).cashbox.findMany({
+    where: { tenantId, ...(cashboxId ? { id: cashboxId } : {}) },
+    select: { id: true, openingBalance: true },
+  });
+  const cashboxIds = cashboxes.map((c: any) => c.id);
+  const rows = await (prisma as any).cashboxTransaction.findMany({
+    where: { tenantId, cashboxId: { in: cashboxIds }, date: { gte: fromDate, lte: toDate } },
+    include: { cashbox: { select: { code: true, name: true } } },
+    orderBy: { date: 'asc' },
+  });
+
+  const totalIn = rows.filter((r: any) => r.direction === 'in').reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+  const totalOut = rows.filter((r: any) => r.direction === 'out').reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+
+  return {
+    title: 'تقارير الخزنة',
+    columns: ['التاريخ', 'الخزنة', 'نوع العملية', 'طريقة الدفع', 'داخل', 'خارج', 'الرصيد بعد العملية', 'ملاحظات'],
+    rows: [
+      ...rows.map((row: any) => [
+        toArDate(row.date),
+        `${row.cashbox?.name || '-'} (${row.cashbox?.code || '-'})`,
+        row.type,
+        'خزنة',
+        row.direction === 'in' ? Number(row.amount || 0) : 0,
+        row.direction === 'out' ? Number(row.amount || 0) : 0,
+        Number(row.afterBalance || 0),
+        row.description || row.referenceType || '—',
+      ]),
+      ['', '', '', 'إجمالي الداخل', totalIn, '', '', ''],
+      ['', '', '', 'إجمالي الخارج', '', totalOut, '', ''],
+    ],
   };
 }
 

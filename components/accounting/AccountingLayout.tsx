@@ -8,6 +8,7 @@ import {
   Scale,
   WalletCards,
   CreditCard,
+  BookOpen,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -21,6 +22,7 @@ const ACCOUNTING_TABS = [
   { href: '/accounting',                title: 'لوحة المحاسبة',      icon: LayoutDashboard },
   { href: '/accounting/treasury',        title: 'الخزنة',           icon: WalletCards },
   { href: '/accounting/payments',        title: 'المدفوعات',        icon: CreditCard },
+  { href: '/accounting/balance-sheet',   title: 'الميزانية العمومية', icon: BookOpen },
   { href: '/accounting/trial-balance',   title: 'ميزان المراجعة',   icon: Scale },
 ] as const;
 

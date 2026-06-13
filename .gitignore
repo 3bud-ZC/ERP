@@ -117,6 +117,8 @@ public
 # Temporary folders
 tmp/
 temp/
+artifacts/
+outputs/
 
 # Docker
 .dockerignore

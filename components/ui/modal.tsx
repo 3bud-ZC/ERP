@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -35,6 +36,12 @@ const SIZE = {
 };
 
 export function Modal({ open, onClose, title, subtitle, size = 'lg', icon, children, footer }: ModalProps) {
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
   React.useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -46,18 +53,19 @@ export function Modal({ open, onClose, title, subtitle, size = 'lg', icon, child
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:p-6 bg-slate-900/30 backdrop-blur-sm"
+      className="fixed inset-0 z-[1000] flex items-center justify-center overflow-y-auto p-4 sm:p-6 bg-slate-900/30 backdrop-blur-sm"
       dir="rtl"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
         className={cn(
+          'relative z-[1001]',
           'bg-[#e8eaf0] rounded-2xl shadow-[14px_14px_34px_rgba(0,0,0,0.12),-10px_-10px_24px_rgba(255,255,255,0.5)]',
-          'w-full my-auto overflow-hidden flex flex-col max-h-[calc(100vh-3rem)]',
+          'w-full overflow-hidden flex flex-col max-h-[calc(100vh-3rem)]',
           SIZE[size],
         )}
       >
@@ -96,7 +104,8 @@ export function Modal({ open, onClose, title, subtitle, size = 'lg', icon, child
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

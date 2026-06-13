@@ -10,6 +10,7 @@ export function AccountingQuickNav() {
         <Link className={pillCls} href="/accounting">لوحة التحكم</Link>
         <Link className={pillCls} href="/accounting/treasury">الخزنة</Link>
         <Link className={pillCls} href="/accounting/payments">المدفوعات</Link>
+        <Link className={pillCls} href="/accounting/balance-sheet">الميزانية العمومية</Link>
         <Link className={pillCls} href="/accounting/trial-balance">ميزان المراجعة</Link>
       </div>
     </div>

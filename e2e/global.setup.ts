@@ -2,8 +2,9 @@
  * Global setup — runs once before all spec projects.
  *
  * 1. Self-heals: if no admin user exists, runs the auth seed before logging in.
- * 2. Logs in via the real /login form using the seeded admin credentials.
- * 3. Saves the resulting cookie + localStorage (Zustand auth store) to
+ * 2. Ensures the system is marked initialized in the isolated E2E database.
+ * 3. Logs in via the real /login form using the seeded admin credentials.
+ * 4. Saves the resulting cookie + localStorage (Zustand auth store) to
  *    e2e/.auth/admin.json. All other specs reuse this storageState, skipping
  *    the login round-trip.
  */
@@ -53,6 +54,23 @@ function ensureSeed(): void {
     });
   } catch {
     // ignore
+  }
+}
+
+/**
+ * Make sure the isolated E2E database is marked initialized so the real
+ * production login route does not return 503 during test auth.
+ */
+function ensureSystemInitialized(): void {
+  if (process.env.E2E_SKIP_SEED === '1') return;
+  try {
+    execSync('npx tsx e2e/scripts/ensure-system-initialized.ts', {
+      stdio: 'ignore',
+      timeout: 30_000,
+      env: process.env,
+    });
+  } catch {
+    // ignore — the login attempt below will fail clearly if the helper cannot run
   }
 }
 
@@ -161,6 +179,7 @@ setup('authenticate as admin', async ({ page, context }) => {
   // unconditionally avoids wasting an auth-tier rate-limit slot on a first
   // login that will inevitably fail with a stale-hash 401.
   ensureSeed();
+  ensureSystemInitialized();
 
   // Pre-compile the /login page so the timed login below isn't racing the
   // bundler for the page itself.

@@ -3,7 +3,7 @@
 هذا الملف يُرسل لأي AI Agent لتنفيذ نشر مشروع جديد على السيرفر مباشرة بدون شرح إضافي.
 
 ## 1) Server Access
-- Server IP: `161.35.54.6`
+- Server IP: `167.99.157.6`
 - SSH User: `root`
 - OS: Ubuntu Linux
 - Web Server: Nginx
@@ -64,7 +64,7 @@ sudo -u postgres createdb -O ${DATABASE_USER} ${DATABASE_NAME} || true
 ### Step C — Upload source tarball
 من الجهاز المحلي:
 ```bash
-scp <LOCAL_TARBALL_PATH> root@161.35.54.6:/tmp/${APP_NAME}.tgz
+scp <LOCAL_TARBALL_PATH> root@167.99.157.6:/tmp/${APP_NAME}.tgz
 ```
 
 ### Step D — Extract release
@@ -171,4 +171,3 @@ curl -I https://${DOMAIN}/api/health
 > Deploy this project to my VPS using `AGENT_DEPLOY_PROFILE_ABUD_FUN.md` exactly.  
 > Use local files as source-of-truth (tar/scp), no git pull.  
 > Create isolated app path, isolated DB/user, isolated PM2 process, isolated Nginx vhost on `<app_name>.abud.fun`, enable SSL, run migrate/build, and return final health-check output.
-

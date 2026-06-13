@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/lib/store/auth';
 import {
   PieChart, TrendingUp, ShoppingCart, Package, BookOpen, Users, Truck,
-  Clock, Receipt, Factory, CreditCard,
+  Receipt, Factory, CreditCard, TriangleAlert, WalletCards,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { REPORT_TABS, hasReportAccess, type ReportKey } from '@/lib/reports/report-access';
@@ -21,14 +21,15 @@ const ALL_TABS = [
   { href: '/reports/sales',                title: 'المبيعات',           icon: TrendingUp },
   { href: '/reports/purchases',            title: 'المشتريات',          icon: ShoppingCart },
   { href: '/reports/inventory',            title: 'المخازن',            icon: Package },
+  { href: '/reports/waste',                title: 'الفاقد',             icon: TriangleAlert },
   { href: '/reports/expenses',             title: 'المصروفات',          icon: Receipt },
   { href: '/reports/customer-statement',   title: 'كشف عميل',          icon: Users },
   { href: '/reports/supplier-statement',   title: 'كشف مورد',          icon: Truck },
   { href: '/reports/receivables',           title: 'مديونيات العملاء',   icon: CreditCard },
   { href: '/reports/payables',              title: 'مستحقات الموردين',   icon: CreditCard },
-  { href: '/reports/aging',                title: 'الأعمار',             icon: Clock },
   { href: '/reports/profit-loss',          title: 'قائمة الدخل',         icon: BookOpen },
   { href: '/reports/balance-sheet',        title: 'الميزانية',           icon: BookOpen },
+  { href: '/reports/cashbox-print',        title: 'تقارير الخزنة',       icon: WalletCards },
   { href: '/reports/manufacturing',        title: 'التصنيع',            icon: Factory },
 ] as const;
 

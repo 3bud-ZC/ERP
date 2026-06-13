@@ -90,7 +90,6 @@ const navItems: NavItem[] = [
       { title: 'أوامر الإنتاج',  href: '/manufacturing/production-orders' },
       { title: 'قوائم المواد',   href: '/manufacturing/bom' },
       { title: 'خطوط الإنتاج',   href: '/manufacturing/production-lines' },
-      { title: 'الفاقد',          href: '/manufacturing/waste' },
     ],
   },
   {
@@ -102,6 +101,7 @@ const navItems: NavItem[] = [
       { title: 'الخزن',               href: '/accounting/treasury' },
       // تم دمج (الخزن + الحركات + التحليلات) داخل صفحة الخزنة نفسها لتقليل التشتيت.
       { title: 'المدفوعات',           href: '/accounting/payments' },
+      { title: 'الميزانية العمومية',  href: '/accounting/balance-sheet' },
       { title: 'ميزان المراجعة',      href: '/accounting/trial-balance' },
       // ملاحظة: صفحات المحاسبة المتقدمة (قيود/دليل حسابات/ميزان مراجعة...)
       // ما زالت موجودة كـ routes لكن تم إخفاؤها من قائمة "المحاسبة" لتبسيط الواجهة.
@@ -117,14 +117,15 @@ const navItems: NavItem[] = [
       { title: 'تقرير المبيعات',   href: '/reports/sales' },
       { title: 'تقرير المشتريات',  href: '/reports/purchases' },
       { title: 'تقرير المخازن',     href: '/reports/inventory' },
+      { title: 'تقرير الفاقد',      href: '/reports/waste' },
       { title: 'تقرير المصروفات',   href: '/reports/expenses' },
       { title: 'كشف حساب عميل',    href: '/reports/customer-statement' },
       { title: 'كشف حساب مورد',    href: '/reports/supplier-statement' },
       { title: 'مديونيات العملاء',  href: '/reports/receivables' },
       { title: 'مستحقات الموردين',  href: '/reports/payables' },
-      { title: 'تقرير الأعمار',     href: '/reports/aging' },
       { title: 'قائمة الدخل',         href: '/reports/profit-loss' },
       { title: 'الميزانية العمومية', href: '/reports/balance-sheet' },
+      { title: 'تقارير الخزنة',      href: '/reports/cashbox-print' },
       { title: 'تقرير التصنيع',    href: '/reports/manufacturing' },
     ],
   },

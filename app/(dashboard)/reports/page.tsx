@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 import {
   TrendingUp, ShoppingCart, Package, BookOpen, Users, Truck,
-  Clock, Receipt, Factory, ChevronLeft, BarChart3,
+  Receipt, Factory, ChevronLeft, BarChart3, TriangleAlert, WalletCards,
 } from 'lucide-react';
 import { ReportsLayout } from '@/components/reports/ReportsLayout';
 import { useAuthStore } from '@/lib/store/auth';
@@ -30,6 +30,12 @@ const REPORTS = [
     icon: Package, accent: 'bg-amber-50 text-amber-600',
   },
   {
+    key: 'waste',
+    href: '/reports/waste', title: 'تقرير الفاقد',
+    description: 'يجمع فاقد أوامر الإنتاج وتسويات المخزون بدون تكرار',
+    icon: TriangleAlert, accent: 'bg-rose-50 text-rose-700',
+  },
+  {
     key: 'expenses',
     href: '/reports/expenses', title: 'تقرير المصروفات',
     description: 'المصروفات حسب الفترة والتصنيف وطريقة الدفع',
@@ -48,12 +54,6 @@ const REPORTS = [
     icon: Truck, accent: 'bg-cyan-50 text-cyan-700',
   },
   {
-    key: 'aging',
-    href: '/reports/aging', title: 'تقرير الأعمار',
-    description: 'تحليل الذمم حسب فترات الاستحقاق',
-    icon: Clock, accent: 'bg-orange-50 text-orange-600',
-  },
-  {
     key: 'profit-loss',
     href: '/reports/profit-loss', title: 'قائمة الدخل',
     description: 'الإيرادات والمصروفات وصافي الربح للفترة',
@@ -64,6 +64,12 @@ const REPORTS = [
     href: '/reports/balance-sheet', title: 'الميزانية العمومية',
     description: 'الأصول والخصوم وحقوق الملكية في تاريخ معين',
     icon: BarChart3, accent: 'bg-teal-50 text-teal-600',
+  },
+  {
+    key: 'cashbox-print',
+    href: '/reports/cashbox-print', title: 'تقارير الخزنة',
+    description: 'حركة الخزنة والداخل والخارج والرصيد النهائي',
+    icon: WalletCards, accent: 'bg-slate-100 text-slate-700',
   },
   {
     key: 'manufacturing',

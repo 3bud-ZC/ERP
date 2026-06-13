@@ -80,7 +80,7 @@ chown -R erp:erp /var/www/erp
 ### 2.1 Clone repository
 ```bash
 cd /var/www/erp
-sudo -u erp git clone https://github.com/YOUR_ORG/erp-system.git .
+sudo -u erp git clone https://github.com/3bud-ZC/ERP.git .
 sudo -u erp git checkout final  # Main production branch
 ```
 

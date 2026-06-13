@@ -8,6 +8,7 @@ import { useToast, Toast } from '@/components/ui/patterns';
 import { Field, SelectField, TextAreaField, Section, FieldGrid } from '@/components/ui/modal';
 import { EntityFormPage } from '@/components/forms/EntityFormPage';
 import { apiGet, apiGetList } from '@/lib/api/fetcher';
+import { MANUAL_PAYMENT_CATEGORIES } from '@/lib/manual-payment-categories';
 
 interface ProductLite {
   id:     string;
@@ -30,6 +31,12 @@ interface ProductionLineEntry {
   name:   string;
   status: string;
 }
+interface CashboxLite {
+  id: string;
+  code: string;
+  name: string;
+  status: string;
+}
 
 export function ProductionOrderForm() {
   const router = useRouter();
@@ -45,8 +52,14 @@ export function ProductionOrderForm() {
     queryFn:  () => apiGetList<ProductionLineEntry>('/api/production-lines'),
     staleTime: 60_000,
   });
+  const cashboxesQ = useQuery({
+    queryKey: ['cashboxes', 'active'],
+    queryFn:  () => apiGetList<CashboxLite>('/api/cashboxes?status=active'),
+    staleTime: 60_000,
+  });
   const products = useMemo(() => productsQ.data ?? [], [productsQ.data]);
   const lines    = useMemo(() => linesQ.data    ?? [], [linesQ.data]);
+  const cashboxes = useMemo(() => cashboxesQ.data ?? [], [cashboxesQ.data]);
 
   // Only finished products are valid manufacturing targets.
   const finishedProducts = useMemo(
@@ -60,6 +73,9 @@ export function ProductionOrderForm() {
     quantity:         '',
     laborCost:        '0',
     overheadCost:     '0',
+    cashboxId:        '',
+    laborPaymentCategory: 'wages',
+    overheadPaymentCategory: 'production_cost',
     date:             new Date().toISOString().slice(0, 10),
     notes:            '',
   });
@@ -147,6 +163,7 @@ export function ProductionOrderForm() {
   const rawMaterialCost = requirements.reduce((sum, r) => sum + (r.required * (productMap.get(r.materialId)?.cost || 0)), 0);
   const parsedLaborCost = parseFloat(form.laborCost) || 0;
   const parsedOverheadCost = parseFloat(form.overheadCost) || 0;
+  const requiresPaymentLink = parsedLaborCost > 0 || parsedOverheadCost > 0;
   const totalCost = rawMaterialCost + parsedLaborCost + parsedOverheadCost;
   const outputQty = parseFloat(form.quantity) || 0;
   const costPerUnit = outputQty > 0 ? totalCost / outputQty : 0;
@@ -196,6 +213,9 @@ export function ProductionOrderForm() {
     if (!form.productId)                       return setError('يجب اختيار المنتج النهائي');
     const qty = parseFloat(form.quantity);
     if (!qty || qty <= 0)                      return setError('الكمية يجب أن تكون أكبر من صفر');
+    if (requiresPaymentLink && !form.cashboxId) {
+      return setError('يجب اختيار الخزنة لربط تكاليف العمالة والتشغيل بالمدفوعات');
+    }
 
     // Validate the manual material rows: at least one row, every row must have
     // a material + a positive quantity, no duplicates.
@@ -226,6 +246,9 @@ export function ProductionOrderForm() {
           productionLineId:  form.productionLineId || undefined,
           laborCost:         parseFloat(form.laborCost)    || 0,
           overheadCost:      parseFloat(form.overheadCost) || 0,
+          cashboxId:         form.cashboxId || undefined,
+          laborPaymentCategory: form.laborPaymentCategory,
+          overheadPaymentCategory: form.overheadPaymentCategory,
           date:              form.date,
           notes:             form.notes.trim() || undefined,
           status:            'pending',
@@ -309,6 +332,54 @@ export function ProductionOrderForm() {
                 value={form.overheadCost} placeholder="0"
                 onChange={e => setForm(f => ({ ...f, overheadCost: e.target.value }))} />
             </FieldGrid>
+          </Section>
+
+          <Section title="ربط المدفوعات" subtitle="سيتم تسجيل صرف العمالة والتشغيل في المدفوعات عند اعتماد أمر الإنتاج">
+            <FieldGrid>
+              <SelectField
+                label="الخزنة"
+                required={requiresPaymentLink}
+                value={form.cashboxId}
+                onChange={e => setForm(f => ({ ...f, cashboxId: e.target.value }))}
+                className="sm:col-span-2"
+              >
+                <option value="">— اختر الخزنة —</option>
+                {cashboxes.map((cashbox) => (
+                  <option key={cashbox.id} value={cashbox.id}>
+                    {cashbox.name} ({cashbox.code})
+                  </option>
+                ))}
+              </SelectField>
+
+              <SelectField
+                label="نوع صرف العمالة"
+                value={form.laborPaymentCategory}
+                onChange={e => setForm(f => ({ ...f, laborPaymentCategory: e.target.value }))}
+              >
+                {MANUAL_PAYMENT_CATEGORIES.map((category) => (
+                  <option key={category.value} value={category.value}>
+                    {category.label}
+                  </option>
+                ))}
+              </SelectField>
+
+              <SelectField
+                label="نوع صرف التشغيل"
+                value={form.overheadPaymentCategory}
+                onChange={e => setForm(f => ({ ...f, overheadPaymentCategory: e.target.value }))}
+              >
+                {MANUAL_PAYMENT_CATEGORIES.map((category) => (
+                  <option key={category.value} value={category.value}>
+                    {category.label}
+                  </option>
+                ))}
+              </SelectField>
+            </FieldGrid>
+            {requiresPaymentLink && (
+              <p className="text-xs text-slate-500">
+                عند اعتماد الأمر سيتم إنشاء حركات صرف مرتبطة بهذا الأمر في شاشة المدفوعات بنفس التصنيفات المختارة.
+              </p>
+            )}
           </Section>
 
           {form.productId && (
